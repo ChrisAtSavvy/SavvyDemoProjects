@@ -1,0 +1,26 @@
+version: 2
+
+models:
+    - name: xsd_TRANExcessDeaths
+      description: "Excess Deaths From the Human Mortality Project"
+      columns:
+          - name: Year
+            description: ""
+          - name: Week
+            description: ""
+          - name: Country
+            description: ""
+          - name: CountryName
+            description: ""
+          - name: CountrySource
+            description: ""
+          - name: Sex
+            description: ""
+          - name: Age
+            description: ""
+          - name: Median_Deaths
+            description: "Median deaths from base years prior to Covid"
+          - name: Deaths
+            description: "Deaths in current year"
+          - name: Excess
+            description: "Variance between Median_Deaths and Deaths"
