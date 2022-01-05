@@ -1,0 +1,252 @@
+---
+title: "Maximize Your US National Parks Pass"
+author: "by : Chris at Savvy Analytics"
+output:
+  html_document:
+    df_print: paged
+---
+
+<span style="color:blue"><font size="3">Background : </font></span>
+Recently a my daughter bought a National Parks pass.  This is quite a value, allowing her and guests to visit any park in the US for $80/year versus the normal $25/day.
+
+<span style="color:blue"><font size="3">Challenge : </font></span>
+Imagine that you were able to work remotely and therefore live about anywhere.  Where would you locate yourself so that you could enjoy the most parks during a weekend trip?
+
+Let's start by clearing the environment and loading the packages needed to manipulate data, modify strings and read website data.
+
+```{r warning=FALSE}
+rm(list=ls())
+options(scipen=999)
+suppressPackageStartupMessages({
+require(tidyverse)
+require(stringr)
+require(rvest)
+require(kableExtra)
+require(DT)
+})
+```
+
+Next, some information about the National Parks is needed and conveniently, Wikipedia has what is needed.  The "rvest" package can extract the relevant data.
+
+```{r}
+# Load the National Parks URL and create a list of the tables
+np_url <- "https://en.wikipedia.org/wiki/List_of_national_parks_of_the_United_States"
+nationalparks <- np_url %>%
+  read_html() %>%
+  html_table(fill = TRUE)
+
+# Isolate the 2nd list which has the National Parks data frame and
+# Use Regex and string manipulation to clean up the data 
+nationalparks <- nationalparks[[2]] %>%
+  rename("DateEstablished" = 4,
+         "AreaAcres" = 5,
+         "AnnualVisitors" = 6) %>%
+  mutate(State = str_extract(Location, "^([\\D]+)"),
+         Lat = as.numeric(str_extract(Location, "(\\d+\\.\\d+)")),
+         Long = as.numeric(str_extract(Location, "(\\-\\d+\\.\\d+)")),
+         AnnualVisitors = as.numeric(str_replace_all(AnnualVisitors, ",","")),
+         AreaAcres = as.numeric(str_replace_all(
+                     str_extract(AreaAcres,
+                                 "^\\d*\\,\\d*\\,\\d*|^\\d*\\,\\d*|^\\d*")
+                     ,",","")),
+         DateEstablished = as.Date(DateEstablished, format = "%B %d, %Y")) %>%
+  dplyr::select(Name, State, Lat, Long, DateEstablished, AreaAcres, AnnualVisitors)
+
+# Let's reduce the data set to only include the lower 48 states since our goal will be to make weekend drives which are hard to do to Islands or in Alaska during the winter
+lower48parks <- nationalparks %>%
+  filter(!State %in% c("Hawaii", "Alaska", "American Samoa", 
+                       "U.S. Virgin Islands", "Puerto Rico")) %>%
+  mutate(Initial = str_sub(Name, 1, 1))
+
+```
+
+Now let's visualize this data on a map of the US to see the size and popularity of the parks.  The first letter of the park name is shown to prevent a lot of unreadable overlap.
+
+```{r fig.height=8, fig.width=12}
+usa <- borders("state", fill = "#efede1")
+
+ggplot() + usa +
+  geom_point(data = lower48parks, 
+             aes(x = Long, y = Lat, color = AnnualVisitors, size = AreaAcres)) +
+  scale_color_gradient(low = "grey", high = "dark red") +
+  geom_text(data = lower48parks,
+            aes(x = Long, y = Lat, label = Initial), size = 4, nudge_x = .8) +
+  theme_void() +
+  labs(title = "US National Parks", 
+       subtitle = "Lower 48 - Park Locations",
+       color = "Annual Visitors",
+       size = "Area in Acres")
+
+```
+
+```{r echo=FALSE, fig.height=15, fig.width=10}
+
+require(DT)
+
+lower48parks %>%
+  dplyr::select(-Initial) %>%
+  datatable()
+
+```
+
+
+Next, determine a method find a location central to the most parks.  Given our challenge scenario we could start in the best location, explore the parks near there on the weekends, then move on to the second best location and repeat until we've visited every park!
+
+K-Means clustering is a good candidate for identifying multiple central points.  It allows us to pick "K" groups and the algorithm will pick the mean or central point for each of the groups.
+
+For example, pick 3 groups and the results would be calculated and be visualized as follows:
+
+```{r fig.height=8, fig.width=12}
+kvalue <- 3
+kstart <- trunc(sqrt(nrow(lower48parks)) / kvalue)
+
+lower48kmeans <- kmeans(dplyr::select(lower48parks, Lat, Long), 
+                        kvalue, 
+                        nstart = kstart)
+
+ggplot() + usa +
+  geom_point(data = lower48parks, 
+             aes(x = Long, y = Lat, color = factor(lower48kmeans$cluster)),
+             size = 4) +
+  geom_point(data = data.frame(lower48kmeans$centers),
+             aes(x = Long, y = Lat), color = "red", shape = 4, size = 10) +
+  theme_void() +
+  labs(title = "US National Parks", 
+       subtitle = paste("Lower 48 - Park Locations w/KMeans Clustering, k = ",kvalue,sep=""),
+       color = "Cluster")
+
+```
+
+From the map, given a "K" of 3 the algorithm divided the parks and determined central points in Nevada, Colorado and Kentucky.
+
+What if we assign a "K" of 1 to 10?  That would give us 55 locations that are central to their respective groupings.
+
+```{r fig.height=12, fig.width=12}
+# Create an empty data frame loaded with the parks locations
+lower48grid <- lower48parks %>%
+  dplyr::select(Name, Initial, Lat, Long) %>%
+  mutate(k = 0,
+         kdistance = 0)
+lower48kmeans <- data.frame(n = as.numeric(),
+                            k = as.numeric(),
+                            Lat = as.numeric(),
+                            Long = as.numeric())
+
+# Loop through 10 values of K and save the results to the data frame
+for (i in 1:10) {
+  kvalue <- i
+  kstart <- trunc(sqrt(nrow(lower48parks)) / kvalue)
+  kstart <- ifelse(kstart == 0,1,kstart)
+  imeans <- data.frame(kmeans(dplyr::select(lower48parks, Lat, Long), 
+                        kvalue, 
+                        nstart = kstart)$centers) %>%
+            mutate(k = row_number())
+  lower48kmeans <- rbind(lower48kmeans,
+                         data.frame(
+                           n = i,
+                           k = imeans$k,
+                           Lat = imeans$Lat,
+                           Long = imeans$Long))
+}
+
+# Plot all 10 groupings
+ggplot() + usa +
+  geom_point(data = lower48parks, 
+             aes(x = Long, y = Lat)) +
+  geom_point(data = lower48kmeans,
+             aes(x = Long, y = Lat), shape = 4, size = 7, color = "red") +
+  facet_wrap(~n, ncol = 3) +
+  theme(strip.text = element_text(size=20)) +
+  theme_void() +
+  labs(title = "US National Parks", 
+       subtitle = "Lower 48 - Park Locations w/KMeans Clustering, k = 1 to 10",
+       color = "Cluster")
+
+
+```
+
+These 55 points will be evaluated to see which has the most of the 50 parks within a weekend trip distance.
+
+The assumption is that a weekend trip distance is no further than 200 miles or about a four hour drive one way. One of the map libraries could calculate the exact driving distance but we will save that for another project.  For this analysis we will calculate the geometrical distance.
+
+This geometrical distance calculation will start with the straight line distance between two points on a sphere with a radius of 3858.8 miles (the earth at the equator).  This "Euclidean" distance will then be converted into a right angle or "Manhattan" distance since there are rarely roads straight between two points.
+
+```{r fig.height=8, fig.width=12}
+# Join the lower48parks data frame to itself so that we can evaluate the distance
+# between all points.  This will be 50 parks * 55 points or 2750 data points
+parkgrid <- crossing(dplyr::select(lower48parks, Name, Lat, Long),
+                     lower48kmeans %>% rename(Lat1 = Lat, Long1 = Long)) %>%
+  mutate(LatMid = ifelse(Lat > Lat1, (Lat - Lat1)/2 + Lat1, 
+                         (Lat1 - Lat)/2 + Lat),
+         LongMid = ifelse(Long > Long1, (Long - Long1)/2 + Long1, 
+                          (Long1 - Long)/2 + Long),
+         Euclidean = 2 * 3858.8 *
+           asin(sqrt(
+             sin((Lat1 * pi/180 - Lat * pi/180)/2)^2 + 
+                    cos(Lat * pi/180) * 
+                    cos(Lat1 * pi/180) * 
+                    sin((Long1 * pi/180 - Long * pi/180)/2)^2
+           )),
+         LatMiles = ifelse(abs((Lat1 - Lat) * 69)>Euclidean,
+                           Euclidean - .01,
+                           abs((Lat1 - Lat) * 69)),
+         LongMiles = sqrt(
+           Euclidean^2 -
+           LatMiles^2),
+         Manhattan = LatMiles + LongMiles)
+
+# Filter the grid to parks within a 200 mile Manhattan distance of the center points and then pick the points with the most parks
+nearbygrid <- parkgrid %>%
+  filter(Manhattan <= 200) %>%
+  arrange(n, k) %>%
+  group_by(n, k, Lat1, Long1) %>%
+  summarise(NumParks = n(),
+            AvgEuclidean = mean(Euclidean),
+            AvgManhattan = mean(Manhattan), .groups = "drop") %>%
+  ungroup() %>%
+  mutate(AllMax = max(NumParks)) %>%
+  filter(NumParks == AllMax)
+
+# Create a neat list of the parks within the radius to display below
+nearbylist <- nearbygrid[1,] %>%
+  dplyr::select(Lat1, Long1) %>%
+  left_join(parkgrid, by = c("Lat1" = "Lat1", "Long1" = "Long1")) %>%
+  filter(Manhattan <= 200) %>%
+  left_join(nationalparks, by = c("Name" = "Name")) %>%
+  dplyr::select(Name, State, Manhattan) %>%
+  distinct()
+
+
+# Plot the map with the targeted location
+ggplot() + usa +
+  geom_text(data = lower48parks,
+            aes(x = Long, y = Lat, label = Initial), size = 4, nudge_x = .5) +
+  geom_point(data = nearbygrid,
+             aes(x = Long1, y = Lat1), shape = 1, size = 3, color = "red") +
+  geom_point(data = nearbygrid,
+             aes(x = Long1, y = Lat1), shape = 1, size = 43, color = "red") +
+  theme_void() +
+  labs(title = "US National Parks", 
+       subtitle = "Lower 48 - Centerpoint with Most Parks within 200 Mile Manhattan Distance")
+```
+
+There it is, a spot just outside of Oljato-Monument Valley, UT with eight parks within 200 miles!
+
+```{r echo=FALSE}
+
+nearbylist %>%
+  rename(Distance = Manhattan) %>%
+  mutate(Distance = round(Distance, 2),
+         Name = str_replace(Name, "\\*","")) %>%
+  kable() %>%
+  kable_styling("striped") %>%
+  row_spec(0, color = "white", background = "black")
+
+```
+
+I hope you enjoyed this exercise in math, maps and National Parks.  Time to get off of this computer and go hike a trail somewhere!
+
+```{r echo=FALSE}
+
+```
+
