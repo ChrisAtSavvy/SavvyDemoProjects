@@ -1,0 +1,131 @@
+---
+title: "Monty Hall Simulation"
+author: "Chris Woolery"
+output: html_notebook
+---
+
+```{r setup, include=FALSE}
+# Copy the proper format to the YAML section above
+# output: ioslides_presentation
+# output: html_notebook
+# output: powerpoint_presentation
+
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## 1 - Libraries, Environment, Custom Functions and Parameter Defaults
+
+```{r include=FALSE}
+# Optional memory clear
+rm(list=ls())
+# Disable Scientific Notation in printing
+options(scipen=999)
+# Unload All Packages
+lapply(names(sessionInfo()$otherPkgs), function(pkgs)
+  detach(
+    paste0('package:', pkgs),
+    character.only = T,
+    unload = T,
+    force = T
+  ))
+
+QuietLoad <- function(library) {
+  suppressWarnings(suppressPackageStartupMessages(
+    library(library, character.only=TRUE)))
+}
+
+# Load libraries
+# Load libraries
+QuietLoad('tidyverse')
+#QuietLoad('readxl')
+#QuietLoad('writexl')
+#QuietLoad('odbc')
+#QuietLoad('DBI')
+#QuietLoad('clipr')
+#QuietLoad('lubridate')
+#QuietLoad('scales')
+#QuietLoad('caret')
+#QuietLoad('multidplyr')
+#QuietLoad('sqldf')
+
+ 
+```
+
+
+<span style="color:blue"><font size="3">Background : </font></span>
+The "Monty Hall Problem" is a famous probability puzzle.
+
+<span style="color:blue"><font size="3">Goal : </font></span>
+We are going to explore daily news feeds and see if we can detect variances in how various news sources report or don't report stories.
+
+![Can text analytics make sense of this?](MontyHall.png)
+
+## 2 - Load Data
+```{r}
+MontyPick = function(Car, Pick) {
+  Range = DoorRange
+  Possible = Range[!Range %in% c(Car, Pick)]
+  if (length(Possible) > 1) {
+    GetSample = sample(Possible, 1) }
+  else {
+    GetSample = sample(rep(Possible, 2), 1)
+    }
+  return(GetSample)
+}
+
+SwitchPick = function(Pick, Monty) {
+  Range = DoorRange
+  Possible = Range[!Range %in% c(Pick, Monty)]
+  if (length(Possible) > 1) {
+    GetSample = sample(Possible, 1) }
+  else {
+    GetSample = sample(rep(Possible, 2), 1)
+    }
+  return(GetSample)
+}
+
+DoorCount = 6
+DoorRange = 1:DoorCount
+SimCount = 1000
+
+Simulation = tibble(
+  CarDoor = sample.int(DoorCount, SimCount, replace = TRUE),
+  PickDoor = sample.int(DoorCount, SimCount, replace = TRUE)) %>%
+  mutate(MontyDoor = mapply(MontyPick, CarDoor, PickDoor),
+         SwitchDoor = mapply(SwitchPick, PickDoor, MontyDoor),
+         PickWin = if_else(PickDoor == CarDoor, 1, 0),
+         SwitchWin = if_else(SwitchDoor == CarDoor, 1, 0))
+
+tibble(
+  DontChangePick = sum(Simulation$PickWin),
+  DontChangeRate = sum(Simulation$PickWin) / nrow(Simulation),
+  ChangePick = sum(Simulation$SwitchWin),
+  ChangePickRate = sum(Simulation$SwitchWin) / nrow(Simulation),
+)
+
+# 3 : Stay odds 1/3, switch odds was 2/3 * 1/2 or 0.333 but now 2/3 * 1/1 or 0.666
+# 4 : Stay odds 1/4, switch odds was 3/4 * 1/3 or 0.250 but now 3/4 * 1/2 or 0.375
+# 5 : Stay odds 1/5, switch odds was 4/5 * 1/4 or 0.200 but now 4/5 * 1/3 or 0.267
+# 6 : Stay odds 1/6, switch odds was 5/6 * 1/5 or 0.167 but now 5/6 * 1/4 or 0.208
+# n : Stay odds 1/n, switch odds was (n-1)/n * 1/(n-1) but now (n-1)/n * 1/(n-2) 
+
+```
+
+$$
+Z_{t1} = p_{t1w1}*x_{t1w1} + p_{t1w2}*x_{t1w2} + p_{t1w3}*x_{t1w3} ... p_{t1w18}*x_{t1w18}\\
+Z_{t2} = p_{t2w1}*x_{t2w1} + p_{t2w2}*x_{t2w2} + p_{t2w3}*x_{t2w3} ... p_{t2w18}*x_{t2w18}\\
+Z_{t3} = p_{t3w1}*x_{t3w1} + p_{t3w2}*x_{t3w2} + p_{t3w3}*x_{t3w3} ... p_{t3w18}*x_{t3w18}\\
+...\\
+Z_{t32} = p_{t32w1}*x_{t32w1} + p_{t32w2}*x_{t32w2} + p_{t32w3}*x_{t32w3} ... p_{t32w18}*x_{t32w18}
+$$
+
+$$
+\max Z = \sum_{t=1}^{32}\sum_{w=1}^{18}p_{tw}x_{tw}
+$$
+
+
+
+```{r include=FALSE}
+
+```
+
