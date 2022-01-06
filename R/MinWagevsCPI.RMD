@@ -1,0 +1,321 @@
+---
+title: "Minimum Wage vs CPI"
+author: "by : Chris at Savvy Analytics"
+output:
+  html_document:
+    df_print: paged
+    code_folding: hide        
+---
+
+<span style="color:blue"><font size="3">Background : </font></span>
+The federal minimum wage was first legislated in the US in 1938 at $0.25/hr.  In the years since, opinions have been divided on the benefits and detriments of a floor on wages.
+
+<span style="color:blue"><font size="3">Goal : </font></span>
+This document will focus on the basic relationship between the federal minimum wage and inflation as measured by the Consumer Price Index or CPI.  Specifically, does an increase in the minimum wage cause inflation?
+
+
+Note : This article, like most of mine on R-Pubs, is both instructional and investigative.  You can re-create any of these charts and tables from the embedded R code.  Click the "Code" button to view. 
+```{r warning=FALSE, message=FALSE}
+
+# Clear Environment and load libraries
+# Optional memory clear
+rm(list=ls())
+# Disable Scientific Notation in printing
+options(scipen=999)
+# Load libraries
+require(tidyverse)
+require(quantmod)
+require(lmtest)
+require(lubridate)
+require(scales)
+require(rvest)
+require(kableExtra)
+#require(gganimate)
+
+# Load data using the QuantMod package to retrive historical data
+# Minimum Wage and CPI data are provided by the St. Louis Federal Reserve "FRED" system
+
+# Call use QuantMod's API into FRED
+invisible(
+getSymbols(c("FEDMINNFRWG", "CPIAUCNS", "CPILFENS"), src = "FRED")
+)
+
+# Combine the time series data into a data frame
+PresentationDF <- data.frame(FEDMINNFRWG) %>%
+  rename(MinWage = 1) %>%
+  mutate(QuoteDate = as.Date(row.names(.))) %>%
+  left_join(data.frame(CPIAUCNS) %>%
+              rename(CPI = 1) %>%
+              mutate(QuoteDate = as.Date(row.names(.))),
+            by = c("QuoteDate")) %>%
+  left_join(data.frame(CPILFENS) %>%
+              rename(CPICore = 1) %>%
+              mutate(QuoteDate = as.Date(row.names(.))),
+            by = c("QuoteDate")) %>%
+  filter(complete.cases(.))
+
+# Create some lagged time series fields to examine relationships between CPI and the Minimum Wage
+PresentationDF <- PresentationDF %>%
+  mutate(
+           MinWage_Scaled = MinWage / 
+             rep(PresentationDF$MinWage[1], nrow(PresentationDF)),
+           MinWage_Lead3 = lead(MinWage, 3),
+           MinWage_Lead12 = lead(MinWage, 12),
+           CPI_Scaled = CPI / 
+             rep(PresentationDF$CPI[1], nrow(PresentationDF)),
+           CPI_Lead3 = lead(CPI, 3),
+           CPI_Lead12 = lead(CPI, 12),
+           CPICore_Scaled = CPICore / 
+             rep(PresentationDF$CPICore[1], nrow(PresentationDF)),
+           CPICore_Lead3 = lead(CPICore, 3),
+           CPICore_Lead12 = lead(CPICore, 12)) %>%
+  dplyr::select(QuoteDate,
+                MinWage, MinWage_Scaled, MinWage_Lead3, MinWage_Lead12,
+                CPI, CPI_Scaled, CPI_Lead3, CPI_Lead12, 
+                CPICore, CPICore_Scaled, CPICore_Lead3, CPICore_Lead12
+                ) %>%
+  filter(complete.cases(.) & QuoteDate >= as.Date("1960-01-01"))
+
+```
+The CPI has a companion metric called the Core CPI which excludes food and energy which are considered to be periodically volatile due to speculation, weather, economics and geo-politics.  These metrics have consistently been tracked since 1960 so our analysis will start there.  
+
+Using data from the Federal Reserve Economic Data archive, here is a quick glance at the gross changes in the CPI, Core CPI and Minimum Wage.
+```{r fig.width = 10}
+
+# Use the gather function to flip the data from wide to narrow format
+# for easier charting
+PresentationDF %>%
+  gather(MetricName, MetricValue, -QuoteDate) %>%
+  filter(MetricName %in% c("CPI", "CPICore", "MinWage")) %>%
+  ggplot(aes(QuoteDate, MetricValue, color = MetricName)) +
+   geom_line(size = 2) +
+   scale_color_manual(values = c("dark blue", "light blue", "dark red")) +
+   facet_wrap(~MetricName, ncol = 3, scales = c("free_y")) +
+   theme_classic() +
+   theme(text=element_text(size=16), 
+         axis.text=element_text(size=12)) +  
+   labs(title = "Minimum Wage vs CPI",
+        subtitle = "Change Since 1960",
+        color = "",
+        y = "",
+        x = "")
+
+```
+The measures appear to have all generally moved upward at a 'similar' rate.  The minimum wage is stair-stepped because it takes deliberate legislative action to move it while the CPI metrics are simply recording what is happening in the economy.
+
+Let's explore that relationship mathematically by calculating a regression line.
+```{r fig.width = 8}
+
+# Create a basic regression model to calculate CPI as the target/Y 
+# using Minimum Wage as the predictor/x
+Model_Base <- lm(formula = CPI ~ MinWage, data = PresentationDF)
+
+a <- summary(Model_Base)$coefficients["MinWage","Estimate"]
+b <- summary(Model_Base)$coefficients["(Intercept)","Estimate"]
+r <- summary(Model_Base)$residuals
+
+x <- mean(r^2)^(1/2)
+
+# Use the gather function to flip the data from wide to narrow format
+# for easier charting
+PresentationDF %>%
+  mutate(RegLine = a * MinWage + b) %>%
+  ggplot(aes(MinWage, CPI)) +
+   geom_point(size = 2) +
+#   geom_line(aes(MinWage, RegLine), size = 2, color = "red") +
+#   Note : geom_smooth automatically plots what we've done manually 
+#    with RegLine = ax+b but this example allows you to see
+#    how you can issolate the components of the regression line
+#    here is the alternative code:
+   geom_smooth(method = "lm", formula = "y ~ x", size = 2, color = "red") +
+   theme_classic() +
+   theme(text=element_text(size=16), 
+         axis.text=element_text(size=12)) +  
+   labs(title = "Minimum Wage vs CPI",
+        subtitle = paste0("Regression Line RSquared : ",
+                          round(summary(Model_Base)$r.squared, 4)))
+```
+
+The regression analysis confirms what we saw visually.  The R Squared is just above 0.97 indicating a highly correlated relationship.  
+
+However, correlation is not causation.  Just because minimum wage and CPI move together does not mean that changes in the minimum wage are driving the change in the CPI.  It could be the inverse, or both could be influenced by other external variables not shown in this analysis.
+
+Looking at other external variables is outside of the scope of this analysis.  We will just be focusing on the most likely direction of causality between minimum wage and CPI.
+
+Cause and effect can be exposed through timing.  If event B always follows event A then that would be a good indication of a causal relationship.  We could at least rule out that event B is causing event A. 
+
+The Granger test from the linear model testing package does exactly this by testing multiple regression models for two variables over n lagged periods.  For more about Granger Causality read here: 
+
+https://en.wikipedia.org/wiki/Granger_causality
+
+Here are the Granger tests for the base and inverse assumption for both CPI and Core CPI.
+
+```{r}
+
+# For more information on the Granger Test in the lmtest package
+# https://cran.r-project.org/web/packages/lmtest/lmtest.pdf
+
+LagPeriods <- 24
+
+# Create the 4 models that align with our 4 hypothesis
+Granger_Base <- grangertest(CPI ~ MinWage, order = LagPeriods, 
+                            data=PresentationDF)
+Granger_Inverse <- grangertest(MinWage ~ CPI, order = LagPeriods,
+                            data=PresentationDF)
+Granger_CoreBase <- grangertest(CPICore ~ MinWage, order = LagPeriods,
+                            data=PresentationDF)
+Granger_CoreInverse <- grangertest(MinWage ~ CPICore, order = LagPeriods,
+                            data=PresentationDF)
+
+# Extract the F statistic that contains the significance score
+GrangerSummary <- data.frame(
+  ModelName = c("Minimum wage causes CPI", 
+                "CPI causes Minimum wage",
+                "Minimum wage causes Core CPI",
+                "CPI Core causes Minimum wage"),
+  SignificanceScore = c(Granger_Base$"Pr(>F)"[2],
+                        Granger_Inverse$"Pr(>F)"[2],
+                        Granger_CoreBase$"Pr(>F)"[2],
+                        Granger_CoreInverse$"Pr(>F)"[2])
+)
+
+GrangerSummary %>%
+  arrange(SignificanceScore) %>%
+#  mutate(RSquared = percent(RSquared, accuracy = .1)) %>%
+  kable() %>%
+  kable_styling("striped") %>%
+  row_spec(0, color = "white", background = "black")
+
+```
+
+Based on the significance score where lower is better and <.05 is the threshold, it appears that changes in the CPI preceed and therefore forecast changes in the minimum wage.  If there is a causal relationship then CPI is the driver.
+
+From this, you could conclude that minimum wage increases do not cause inflation.
+
+It doesn't mean that they couldn't, it just means that mathematically, it appears that they haven't based on this data.
+
+Let's examine the variables on a single plot.
+```{r fig.width=10}
+
+suppressMessages(
+PresentationDF %>%
+  gather(MetricName, MetricValue, -QuoteDate) %>%
+  filter(MetricName %in% c("CPI_Scaled", "CPICore_Scaled", "MinWage_Scaled")) %>%
+  mutate(MaxQuoteDate = max(QuoteDate), 
+         MaxValue = ifelse(QuoteDate == MaxQuoteDate, MetricValue, NA)) %>%
+  ggplot(aes(QuoteDate, MetricValue, color = MetricName)) +
+   geom_line(size = 2) +
+   geom_label(aes(QuoteDate, MetricValue, label = round(MaxValue, 2)),
+             color = "black", fill = "white", na.rm=TRUE) +
+   scale_color_manual(values = c("dark blue", "light blue", "dark red")) +
+   scale_x_date(date_labels="%Y",
+                breaks = seq(min(PresentationDF$QuoteDate),
+                             max(PresentationDF$QuoteDate), by="5 years")) +
+   theme_classic() +
+   theme(text=element_text(size=16), 
+         axis.text=element_text(size=12)) +  
+   labs(title = "Minimum Wage vs CPI",
+        subtitle = "Scaled Change Factor Since 1960",
+        caption = "Minimum wage was conveniently $1/hr in 1960",
+        color = "",
+        y = "",
+        x = "")
+)
+```
+
+From this plot you can see several periods from 1960 to 1980 where the minimum wage was changing at roughly the same rate or even in advance of the CPI.  Starting in 1980, when there was a push to lower inflation, the minimum wage stayed fixed for a long period of time.  CPI climbed steadily during those periods despite a flat minimum wage.
+
+This visual seems to confirm the math from the Granger causation analysis.  The legislative decision to raise minimum wages lags and is therefore caused by inflation.
+
+In 1960 the minimum wage was 1 and now it's 7.25.  If minimum wage had tracked exactly with CPI it would now be 9.27.  Therefore you could say that the minimum wage has lost about 22% of it's purchasing power since 1960.
+
+Since increases in the minimum wage are legislative and therefore political, let's examine the historical values versus the political party of the President.
+```{r fig.width=10}
+
+# Get a data frame of the presidents and their party by year from Wikipedia
+wiki_presidents_url <- "https://en.wikipedia.org/wiki/List_of_presidents_of_the_United_States"
+
+# Use the rvest package to create a dataframe from the data table on Wikipedia
+wiki_presidents_df <- wiki_presidents_url %>%
+  read_html() %>%
+  html_table(fill = TRUE)
+wiki_presidents_df <- wiki_presidents_df[[2]]
+
+# Reset column names for clarity
+colnames(wiki_presidents_df) <- c("Index", "Term1", "Term2", "Pres", 
+                                  "Party1", "Party2", "Election", "VP")
+
+# Clean-up the data frame down to year and party in the white house
+PresidentParty_df <- wiki_presidents_df[1:nrow(wiki_presidents_df)-1,] %>%
+  mutate(Pres = ifelse(str_length(str_replace_all(Pres, "\\s", "")) > 0,
+                          Pres, Party1),
+         Term1 = ifelse(str_length(Term1) < 10, Term2, Term1),
+         Party2 = ifelse(str_length(Party2) < 5 & 
+                         str_length(Election) > 5, Election, Party2),
+         Party2 = ifelse(str_length(str_replace_all(Party2, "\\s", "")) >0,
+                         Party2, NA)) %>%
+  fill(Party2) %>%
+  mutate(Year = ifelse(str_detect(Election, "\\d\\d\\d\\d"),
+                            Election, str_extract(Term1, "(?<=\\,.)\\d{4}"))) %>%
+  rename(Party = Party2) %>%
+  filter(Year >= "1960") %>%
+  mutate(Year = as.numeric(Year)) %>%
+  dplyr::select(Year, Party) %>% distinct()
+
+# Create a data frame that joins the presedential df to the statistics df
+PresentationPartyDF <- PresentationDF %>%
+  mutate(Year = year(QuoteDate)) %>%
+  left_join(PresidentParty_df, by = c("Year")) %>%
+  fill(Party)
+
+# Build a plot using blue for democrats and red for republicans
+PresentationPartyDF %>%
+  gather(MetricName, MetricValue, -QuoteDate, -Year, -Party) %>%
+  filter(MetricName %in% c("MinWage_Scaled")) %>%
+  ggplot(aes(QuoteDate, MetricValue, color = Party)) +
+   geom_path(aes(group = "Bogus"), size = 2) +
+   scale_color_manual(values = c("blue", "dark red")) +
+   scale_y_continuous(labels = dollar_format(accuracy = .01)) +
+   scale_x_date(date_labels="%Y",
+                breaks = seq(min(PresentationDF$QuoteDate),
+                             max(PresentationDF$QuoteDate), by="5 years")) +
+   theme_classic() +
+   theme(text=element_text(size=16), 
+         axis.text=element_text(size=12)) +  
+   labs(title = "Minimum Wage by Presidential Party in Power",
+        subtitle = "Since 1960",
+        caption = "Minimum wage was conveniently $1/hr in 1960",
+        color = "",
+        y = "",
+        x = "")
+```
+
+```{r}
+# Summarise the data frame by counting the non-zero changes in minimum wage
+# per party
+PresentationPartyDF %>%
+  mutate(MinWageChange = MinWage - lag(MinWage, 1, default = 0),
+         MinWageChangeCount = ifelse(MinWageChange > 0, 1, 0)) %>%
+  group_by(Party) %>%
+  summarise("Number of Min Wage Increases" = sum(MinWageChangeCount), 
+            .groups = "drop") %>%
+  kable() %>%
+  kable_styling("striped") %>%
+  row_spec(0, color = "white", background = "black")
+
+```
+
+Visually you can see that Republican administrations tend to drive fewer increases and when they do, it is toward the end of their terms and Democratic administrations drive slightly more increcases and they are toward the beginning.
+
+Anyone who follows US politics is probably not surprised by that.
+
+So in conclusion:
+
+1. Minimum wage and inflation as measured by the CPI are highly correlated.
+2. Increases in minimum wage have not historically preceded inflation.  In fact, inflation precedes minimum wage increases so if anything is causal it appears that inflation drives minimum wage.
+
+I personally think it would be great if this could be de-politicized and put on a predictable annual adjustment schedule based on the CPI but that would deny each party a chance to stake out a position to differentiate themselves so I doubt it will ever happen.
+
+You however, should not be minimal but instead:
+
+Be savvy.

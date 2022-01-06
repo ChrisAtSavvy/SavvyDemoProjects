@@ -1,0 +1,726 @@
+---
+title: "NFL Survivor Project"
+author: "Chris at Savvy Analytics"
+output:
+  html_document:
+    df_print: paged
+    code_folding: hide        
+---
+
+<span style="color:blue"><font size="3">Background : </font></span>
+We decided to have an NFL "Survivor League" for our fall office pool this year (2021-2022).  The rules are fairly simple.
+
+1. Pick 1 winning team for each week of the 18 game regular season.  If your team wins or ties, you advance to the next week.  Week 12 is a special case where you have to pick two teams and both have to win in order to advance
+
+2. You can only pick each team one time.  Therefore you have to pick 19 teams total.
+
+3. The last survivor takes 75% of the money in the pool while the runner up takes 25%.  If there are ties, they divide the money accordingly.
+
+So the question is, how can we use analytics to make the best picks?
+
+Note : This article, like most of mine on R-Pubs, is both instructional and investigative.  You can re-create any of these charts and tables from the embedded R code.  Click the "Code" button to view. 
+
+```{r include=FALSE}
+## Libraries, Environment, Custom Functions and Parameter Defaults
+
+# Optional memory clear
+rm(list=ls())
+# Disable Scientific Notation in printing
+options(scipen=999)
+# Unload All Packages
+lapply(names(sessionInfo()$otherPkgs), function(pkgs)
+  detach(
+    paste0('package:', pkgs),
+    character.only = T,
+    unload = T,
+    force = T
+  ))
+
+QuietLoad <- function(library) {
+  suppressWarnings(suppressPackageStartupMessages(
+    library(library, character.only=TRUE)))
+}
+
+suppressPackageStartupMessages({
+require(tidyverse)
+require(readxl)
+require(rvest)
+require(lubridate)
+require(scales)
+require(kableExtra)
+require(lpSolve)
+})
+
+
+DeComma <- function(DollarString) {
+  str_replace_all(DollarString, "\\$|\\,", "") %>%
+    as.numeric()
+  
+}
+
+LineToProb = function(Line) {
+  Odds = if_else(Line >= 0, (Line / 100), (-100 / Line))
+  Probability = 1 / (Odds + 1)
+  return(Probability)
+}
+
+ProbToOdds = function(Prob) {
+  Odds = 1 / Prob - 1
+  return(Odds)
+}
+
+ProbToLine = function(Prob) {
+  Odds = 1 / Prob - 1
+  Line = if_else(Odds < 1, 1/Odds * -100, Odds * 100)
+  return(Line)
+}
+
+```
+
+First we will load in the 2021 schedule from www.pro-football-reference.com where we can get both the schedule and results.
+
+Below is an example of the table we built where each row represents a possible outcome of a scheduled game.
+
+```{r}
+## 2 - Load Data - Schedules
+
+SchedURL = "https://www.pro-football-reference.com/years/2021/games.htm"
+SchedYear = "2021"
+
+ScheduleDF = bind_cols(
+ tibble(
+  Week_Num = SchedURL %>% read_html() %>% html_nodes('*[data-stat="week_num"]') %>% html_text(),
+  Date = SchedURL %>% read_html() %>% html_nodes('*[data-stat="game_date"]') %>% html_text(),
+  VisTm = SchedURL %>% read_html() %>% html_nodes('*[data-stat="winner"]') %>% html_text(),
+  HomeTm = SchedURL %>% read_html() %>% html_nodes('*[data-stat="loser"]') %>% html_text(),
+  GameLoc = SchedURL %>% read_html() %>% html_nodes('*[data-stat="game_location"]') %>% html_text(),
+  PtsWin = SchedURL %>% read_html() %>% html_nodes('*[data-stat="pts_win"]') %>% html_text()) %>%
+filter(Date != "Date"), 
+ tibble(
+  VisRef = SchedURL %>% read_html() %>% html_nodes('*[data-stat="winner"] a') %>% html_attr("href"),
+  HomeRef = SchedURL %>% read_html() %>% html_nodes('*[data-stat="loser"] a') %>% html_attr("href"))) %>%
+  mutate(VisID = str_extract(VisRef, "(?<=/teams/).*(?=/)") %>% toupper(),
+         HomeID = str_extract(HomeRef, "(?<=/teams/).*(?=/)") %>% toupper(),
+         Date = paste0(Date) %>% as.Date(format = "%Y-%m-%d"),
+         Winner = if_else(PtsWin != "", VisID, ""),
+         SwapTm = if_else(GameLoc != "@", VisTm, ""),
+         SwapID = if_else(GameLoc != "@", VisID, ""),
+         VisTm = if_else(GameLoc != "@", HomeTm, VisTm),
+         VisID = if_else(GameLoc != "@", HomeID, VisID),
+         HomeTm = if_else(GameLoc != "@", SwapTm, HomeTm),
+         HomeID = if_else(GameLoc != "@", SwapID, HomeID)) %>%
+  dplyr::select(-SwapTm, -SwapID, -GameLoc, -PtsWin)
+
+PlanDF = ScheduleDF %>%
+  filter(Week_Num %in% as.character(seq(1, 18))) %>%
+  mutate(V = VisID, 
+         H = HomeID,
+         Week_Num = as.numeric(Week_Num)) %>%
+  dplyr::select(Week_Num, Date, VisID, HomeID, V, H) %>%
+  pivot_longer(-c(Date, Week_Num, VisID, HomeID), 
+               names_to = "Version", values_to = "Winner") %>%
+  group_by(Week_Num) %>%
+  mutate(OutcomeID = paste0(str_pad(Week_Num, 2, "0", side = c("left")),
+                         str_pad(row_number(), 3, "0", side = c("left")))) %>%
+  ungroup()
+
+ResultDF = ScheduleDF %>%
+  filter(Winner != "" & !is.na(Winner)) %>%
+  mutate(V = VisID, 
+         H = HomeID,
+         Week_Num = as.numeric(Week_Num)) %>%
+  dplyr::select(Week_Num, Date, VisID, HomeID, V, H, Winner) %>%
+  pivot_longer(-c(Date, Week_Num, VisID, HomeID, Winner), 
+               names_to = "Version", values_to = "TeamID") %>%
+  mutate(Result = if_else(Winner == TeamID, "Winner", "Loser") %>%
+           factor(levels = c("Winner", "Loser"))) %>%
+  dplyr::select(Week_Num, TeamID, Result)
+
+# PossibleDF = expand_grid(
+#   "Winner01" = filter(PlanDF, Week_Num == 1)$Winner,
+#   "Winner02" = filter(PlanDF, Week_Num == 2)$Winner,
+#   "Winner03" = filter(PlanDF, Week_Num == 3)$Winner) %>%
+#   filter(Winner01 != Winner02 & Winner01 != Winner03 & Winner02 != Winner03)
+
+
+# VertSchedDF = PlanDF %>%
+#   mutate(Opp = if_else(Winner==VisID, HomeID, VisID)) %>%
+#   rename(Team = Winner, Place = Version) %>%
+#   dplyr::select(Week_Num, Team, Place, Opp)
+
+head(PlanDF, 10) %>%
+  kable("html", escape = FALSE,
+        caption = paste0('<p style="color:black; font-size:18px">',
+        '2021 NFL Schedule - Possible Outcomes',
+        '</p>')) %>%
+    kable_styling("striped",
+                  bootstrap_options = c("hover", "condensed")) %>%
+    row_spec(0, color = "white", background = "black") 
+
+```
+
+Now we need to get some idea of what the probability is of each of these possible outcomes happening.  We will build that by:
+
+1. Taking the consensus ordinal pre-season ranking from three major sports networks (ESPN, CBS and Fox) to form our basis.
+
+2. Using that pre-season ranking we will calculate a "Relative Probability Index" or RPI (we're borrowing the acronym) of each team's probability of beating the average team in the league.  After looking at the data for prior years and rounding for simplicity, the best team in the league has roughly an 80% chance of beating an average team while the worst team in the league has roughly a 20% chance.
+
+Of course those pre-season expectations change as the reality of performance, injuries and other factors impact the actual results of games.  Therefore, as the season progresses, we need to update our RPI.  Rather than build a complicated "bottom-up" model based on hundreds of factors, we're going to keep it simple and follow the money.  Specifically the odds set by the major online betting platforms.
+
+3. We will take the consensus money line from the 6 major online betting platforms each week and use that to adjust our RPI and game probabilities.  This will be a continuous weighted adjustment so the RPI for each team will shift gradually rather than being fully overwritten by the latest money line.
+
+```{r}
+
+## Load Data - Vegas Odds and Pre-Season Rankings
+
+OddsUrl = "https://www.vegasinsider.com/nfl/odds/las-vegas/money/"
+
+RawTable = OddsUrl %>%
+  read_html() %>%
+  html_node('*[class="frodds-data-tbl"]') %>%
+  html_table(fill = TRUE)
+
+OddsTable = RawTable %>%
+  filter(X10 != "") %>%
+  mutate(DateText = str_extract(X1, "\\d\\d\\/\\d\\d"),
+         MonthText = str_sub(DateText,1,2),
+         TimeText = str_extract(X1, "(?<=\\d\\d\\/\\d\\d\\s).*(?=\\n)"),
+         YearText = if_else(as.numeric(MonthText)<=2, year(Sys.Date()) + 1, year(Sys.Date())),
+         GameTime = paste0(DateText, "/", YearText, TimeText) %>%
+           as.POSIXct(format = "%m/%d/%Y %H:%M"),
+         VisTm = str_extract(X1, "(?<=\\d\\d\\d.).*"),
+         HomeTm = str_replace(X1, "(?<=\\d\\d\\d.).*", "") %>%
+                  str_extract("(?<=\\d\\d\\d.).*$"),
+         VisLine = str_extract(X10, "(?<=^)\\-\\d*|(?<=(^\\+))\\d*") %>% as.numeric() ,
+         HomeLine = str_extract(X10, "\\-\\d*(?<=$)|(?<=(\\+))\\d*(?<=$)") %>% as.numeric(),
+         VisProb = LineToProb(VisLine),
+         HomeProb = LineToProb(HomeLine),
+         ProbGap = (VisProb + HomeProb) - 1) %>%
+  dplyr::select(GameTime, VisTm, HomeTm, VisLine, HomeLine, VisProb, HomeProb, ProbGap)
+
+# Need to store and lock game odds so that we don't loose games that already happened
+
+ArchiveOdds = readRDS("C:\\Users\\Chris.Woolery\\Documents\\2021\\ArchiveOdds.RDS")
+
+NewArchiveOdds = bind_rows(
+  OddsTable %>%
+  mutate(ArchiveDate = Sys.time()) %>%
+  dplyr::select(ArchiveDate, everything()),
+  ArchiveOdds) %>%
+  group_by(GameTime, VisTm) %>%
+  mutate(MaxArchiveDate = max(ArchiveDate)) %>%
+  ungroup() %>%
+  arrange(GameTime, VisTm) %>%
+  filter(ArchiveDate == MaxArchiveDate) %>%
+  dplyr::select(-MaxArchiveDate) %>%
+  distinct()
+
+saveRDS(NewArchiveOdds, "C:\\Users\\Chris.Woolery\\Documents\\2021\\ArchiveOdds.RDS")
+
+# Restore Odds Table with Old Odds Plus Latest Odds
+OddsTable = NewArchiveOdds %>%
+  dplyr::select(-ArchiveDate)
+
+OddsTableLong = 
+  bind_rows(OddsTable %>%
+              mutate(Date = as.Date(GameTime),
+                     TeamName_VegasInsider = VisTm,
+                     Vegas_Prob = VisProb) %>%
+              dplyr::select(Date, TeamName_VegasInsider, Vegas_Prob),
+            OddsTable %>%
+              mutate(Date = as.Date(GameTime),
+                     TeamName_VegasInsider = HomeTm,
+                     Vegas_Prob = HomeProb) %>%
+              dplyr::select(Date, TeamName_VegasInsider, Vegas_Prob)) %>%
+            arrange(Date, desc(Vegas_Prob))
+
+TeamFile = "C:\\Users\\Chris.Woolery\\Documents\\2021\\NF Misc.xlsx"
+
+TeamDF = read_xlsx(TeamFile, sheet = "Presentation") %>%
+  filter(!is.na(TeamID))
+
+PlanDF = PlanDF %>%
+  left_join(TeamDF %>%
+              dplyr::select(TeamID, TeamName_VegasInsider),
+            by = c("Winner" = "TeamID"))
+
+ForecastDF = TeamDF %>%
+  mutate(Week = 1) %>% 
+  rename(Pre_RPI = PS_RPI) %>%
+  dplyr::select(-TeamName_ProFBRef, -TeamName_VegasInsider) %>%
+  right_join(PlanDF, by = c("TeamID" = "Winner", "Week" = "Week_Num")) %>%
+  mutate(OppID = if_else(VisID == TeamID, HomeID, VisID)) %>%
+  dplyr::select(OutcomeID, Week, Date, TeamID, TeamName_VegasInsider, Pre_RPI, OppID) %>%
+  left_join(TeamDF %>%
+              mutate(Week = 1) %>% 
+              rename(OppPre_RPI = PS_RPI) %>%
+              dplyr::select(Week, TeamID, OppPre_RPI),
+            by = c("OppID" = "TeamID", "Week" = "Week")) %>%
+  mutate(Pre_Prob = Pre_RPI + (Pre_RPI * (0.5 - OppPre_RPI))) %>%
+  left_join(OddsTableLong,
+            by = c("Date", "TeamName_VegasInsider")) %>%
+  mutate(Post_Prob = if_else(Vegas_Prob > 0,
+                             (Vegas_Prob + Pre_Prob * Week) / (Week + 1),
+                             Pre_Prob),
+         Post_RPI = if_else(Vegas_Prob > 0, 
+                            (Vegas_Prob / (-1 * OppPre_RPI + 1.5) + Pre_RPI * Week) / (Week + 1),
+                            Pre_RPI)) %>%
+  arrange(OutcomeID)
+
+# Loop through and populate Pre/Post Odds
+StartRow = 33
+for (i in StartRow :nrow(ForecastDF)) {
+  ForecastDF$TeamName_VegasInsider[i] = 
+    if_else(sum((ForecastDF$Week == ForecastDF$Week[i] -1) * (ForecastDF$TeamID == ForecastDF$TeamID[i])) > 0,
+      max("",ForecastDF$TeamName_VegasInsider[ForecastDF$Week == ForecastDF$Week[i] -1 
+                              & ForecastDF$TeamID == ForecastDF$TeamID[i]]),
+      max("",ForecastDF$TeamName_VegasInsider[ForecastDF$Week == ForecastDF$Week[i] -2 
+                              & ForecastDF$TeamID == ForecastDF$TeamID[i]]))
+  ForecastDF$Pre_RPI[i] = 
+    if_else(sum((ForecastDF$Week == ForecastDF$Week[i] -1) * (ForecastDF$TeamID == ForecastDF$TeamID[i])) > 0,
+      max(0, ForecastDF$Post_RPI[ForecastDF$Week == ForecastDF$Week[i] -1 & ForecastDF$TeamID == ForecastDF$TeamID[i]]),
+      max(0, ForecastDF$Post_RPI[ForecastDF$Week == ForecastDF$Week[i] -2 & ForecastDF$TeamID == ForecastDF$TeamID[i]]))
+  ForecastDF$OppPre_RPI[i] = 
+    if_else(sum((ForecastDF$Week == ForecastDF$Week[i] -1) * (ForecastDF$TeamID == ForecastDF$OppID[i])) > 0,
+      max(0, ForecastDF$Post_RPI[ForecastDF$Week == ForecastDF$Week[i] -1 & ForecastDF$TeamID == ForecastDF$OppID[i]]),
+      max(0, ForecastDF$Post_RPI[ForecastDF$Week == ForecastDF$Week[i] -2 & ForecastDF$TeamID == ForecastDF$OppID[i]]))
+  ForecastDF$Pre_Prob[i] = 
+    ForecastDF$Pre_RPI[i] + (ForecastDF$Pre_RPI[i] * (0.5 - ForecastDF$OppPre_RPI[i])) 
+  ForecastDF$Vegas_Prob[i] = 
+    if_else(is.na(ForecastDF$Vegas_Prob[i]), 0, ForecastDF$Vegas_Prob[i])
+  # Old Version weighted total of prior weeks
+  # ForecastDF$Post_Prob[i] = 
+  #   if_else(ForecastDF$Vegas_Prob[i] > 0, 
+  #     (ForecastDF$Vegas_Prob[i] + ForecastDF$Pre_Prob[i] * ForecastDF$Week[i]) / (ForecastDF$Week[i] + 1),
+  #     ForecastDF$Pre_Prob[i])
+  # New Version weights prior weeks equal to current odds
+  ForecastDF$Post_Prob[i] = 
+    if_else(ForecastDF$Vegas_Prob[i] > 0, 
+      (ForecastDF$Vegas_Prob[i] + ForecastDF$Pre_Prob[i]) / 2,
+      ForecastDF$Pre_Prob[i])
+  ForecastDF$Post_RPI[i] = 
+    if_else(ForecastDF$Vegas_Prob[i] > 0, 
+      (ForecastDF$Vegas_Prob[i] / (-1 * ForecastDF$OppPre_RPI[i] + 1.5) + ForecastDF$Pre_RPI[i] * ForecastDF$Week[i]) 
+        / (ForecastDF$Week[i] + 1),
+      ForecastDF$Pre_RPI[i])
+}
+
+# Maybe archive and retrieve ForecastDF at this point?
+# saveRDS(ForecastDF, "C:\\Users\\Chris.Woolery\\Documents\\2021\\ForecastDF.RDS")
+
+```
+
+```{r fig.width=10}
+
+head(ForecastDF, 5) %>%
+  kable("html", escape = FALSE,
+        caption = paste0('<p style="color:black; font-size:18px">',
+        '2021 NFL Schedule - Forecasted Outcomes',
+        '</p>')) %>%
+    kable_styling("striped",
+                  bootstrap_options = c("hover", "condensed"),
+                  full_width = T) %>%
+    row_spec(0, color = "white", background = "black") 
+
+```
+
+Here you can see:
+
+1. Pre_RPI : The RPI prior to considering the Vegas line for this weeks' games.  Remember, the RPI is the relative probability of that team beating the average team in the league.
+
+2. OppPre_RPI : The Pre_RPI for the opposing team.
+
+3. Pre_Prob : The probability of the selected team beating the opponent that week prior to considering the Vegas line.  For example a team with a RPI of 0.80 playing a team with a RPI of 0.55 has a 76% chance of winning.
+
+4. Vegas_Prob : The 6 site consensus Vegas money line for the game (if available), converted to probability.
+
+5. Post_Prob : The Pre_Prob adjusted by the Vegas_Prob where both are weighted equally (This is a change after week 2, previously the Pre_Prob was weighted by the number of weeks results it is based on while the Vegas_Prob was weighted at 1.  This resulted in too much weighting to the pre-season rankings).
+
+6. Post_RPI : The Post_Prob converted back to RPI.
+
+Now what we want to do is use the Post_Prob from each week to create a system of linear equations to maximize.  In other words, we want to maximize our total probability of winning.  
+
+Let's look at how we would represent this mathematically:
+
+Where :
+
+p = The probability of winning a specific game
+
+Z = The total probability of picking the winning team
+
+t = Subscript, team id
+
+w = Subscript, week number
+
+Solve for :
+
+x = 1 pick the game, 0 don't pick the game
+
+So we will simultaneously solve the following series of 32 (one for each team) equations with 18 (the weeks in the regular season) variables.
+
+$$
+Z_{t1} = p_{t1w1}*x_{t1w1} + p_{t1w2}*x_{t1w2} + p_{t1w3}*x_{t1w3} ... p_{t1w18}*x_{t1w18}\\
+Z_{t2} = p_{t2w1}*x_{t2w1} + p_{t2w2}*x_{t2w2} + p_{t2w3}*x_{t2w3} ... p_{t2w18}*x_{t2w18}\\
+Z_{t3} = p_{t3w1}*x_{t3w1} + p_{t3w2}*x_{t3w2} + p_{t3w3}*x_{t3w3} ... p_{t3w18}*x_{t3w18}\\
+...\\
+Z_{t32} = p_{t32w1}*x_{t32w1} + p_{t32w2}*x_{t32w2} + p_{t32w3}*x_{t32w3} ... p_{t32w18}*x_{t32w18}
+$$
+
+Which can be written as:
+$$
+\max Z = \sum_{t=1}^{32}\sum_{w=1}^{18}p_{tw}x_{tw}
+$$
+
+Subject to these constraints:
+$$
+x_{t1w1} + x_{t1w2} + x_{t1w3} ... x_{t1w18} = 1\\
+x_{t1w1} + x_{t2w1} + x_{t3w1} ... x_{t32w1} = 1\\
+$$
+
+This type of problem is not your typical linear programming scenario, in fact, it looks a lot like a "Transportation problem" https://en.wikipedia.org/wiki/Transportation_theory_(mathematics).
+
+So in bridging the concepts here, we can see that each team "supplies" a win while each week "demands" a win.  Also, week 12 demands two wins.
+
+Therefore we will hijack the "lp.transport" method from the "lpsolve" package where:
+
+1. The probabilities are the "costs" that we want to maximize.
+
+2. Each team supplies at most 1 game for all 18 weeks.
+
+3. Each week demands 1 game for weeks 1-11 and 13-18 with week 12 demanding 2 games
+
+```{r}
+
+# Thanks to this article for tips on how to use lpsolve 
+# https://towardsdatascience.com/operations-research-in-r-transportation-problem-1df59961b2ad
+# Set-up a 'cost' matrix which is the odds of winning.  Odds are zero in a bye week so override
+# Teams are the rows or Suppliers in this transportation matrix
+# weeks are the columns or customers
+costs = ForecastDF %>%
+  dplyr::select(TeamID, Week, Pre_Prob) %>%
+  mutate(Pre_Prob = if_else(is.na(Pre_Prob), 0, Pre_Prob)) %>%
+  pivot_wider(names_from = Week, values_from = Pre_Prob, values_fill = 0) %>%
+  as.matrix()
+rownames(costs) = costs[,1]
+costs = costs[,-1]
+
+# Build in picked weeks and teams
+complete_weeks = as.numeric(c(1, 2, 3, 4, 5, 
+                              6, 7, 8, 9, 10,
+                              11, 12, 12))
+picked_teams = as.character(c("SFO", "GNB", "RAV", "BUF", "MIN", 
+                              "CLT", "NWE", "KAN", "MIA", "PIT",
+                              "CLE", "DAL", "TAM"))
+
+CompletedPicksDF = tibble(
+  TeamID = picked_teams,
+  Week = complete_weeks,
+  Picked = rep(-1, length(complete_weeks))
+)
+
+# Suppliers constraints are <= their supply
+row.signs = rep("<=", 32)
+# In our case that's games supplied to win are 1 per each of the 32 teams
+row.rhs = rep(1, 32)
+# Zero out for teams already picked in prior weeks
+row.rhs = row.rhs * (!rownames(costs) %in% picked_teams)
+
+# Customer constraints are = their demand  
+col.signs = rep("=", 18)
+# In our case that's games demanded to win are 1 per weeks 1-11 and 13-16 plus 2 in week 12
+col.rhs = c(rep(1, 11), 2, rep(1, 6))
+# Zero out for weeks already picked
+col.rhs = col.rhs * (!colnames(costs) %in% complete_weeks)
+
+# run the solution
+SolutionMatrix = lp.transport(costs, "max", row.signs, row.rhs, col.signs, col.rhs)$solution
+rownames(SolutionMatrix) = rownames(costs)
+colnames(SolutionMatrix) = colnames(costs)
+
+PicksDF = SolutionMatrix %>%
+  as_tibble() %>%
+  mutate(TeamID = rownames(SolutionMatrix)) %>%
+  dplyr::select(TeamID, everything()) %>%
+  pivot_longer(-TeamID, names_to = "Week", values_to = "Picked") %>%
+  filter(Picked > 0) %>%
+  mutate(Week = as.numeric(Week)) %>%
+  bind_rows(CompletedPicksDF) %>%
+  arrange(Week, TeamID)
+
+PicksDisplayDF = ForecastDF %>%
+  dplyr::select(Week, TeamID, Post_Prob) %>%
+  left_join(PicksDF, by = c("Week", "TeamID")) %>%
+  mutate(TeamID = factor(TeamID),
+         Picked = factor(
+           case_when(
+             Picked == -1 ~ "Past Pick - Winner",
+             Picked == 1 ~ "Future Pick",
+             TRUE ~ "Not Picked"), levels = c("Past Pick - Winner", "Past Pick - Loser", 
+                                              "Future Pick", "Not Picked"))) %>%
+  arrange(TeamID, Week) %>%
+  left_join(ResultDF, by = c("TeamID" = "TeamID", "Week" = "Week_Num")) %>%
+  mutate(TeamID = factor(TeamID),
+         Category = case_when(
+            Post_Prob > 0.5 & Result == "Loser" ~ "Upset", 
+            Post_Prob > 0.5 & Result == "Winner" ~ "Expected", 
+            Post_Prob < 0.5 & Result == "Loser" ~ "Expected",
+            Post_Prob < 0.5 & Result == "Winner" ~ "Upset",
+            TRUE ~ as.character("Future")) %>%
+              factor(levels = c("Expected", "Upset", "Future")),
+         Result = as.character(Result),
+         Result = if_else(is.na(Result), "Future", Result) %>%
+              factor(levels=c("Winner", "Loser", "Future")),
+         Picked = if_else(Picked == "Past Pick - Winner" & Result == "Loser", 
+                          "Past Pick - Loser", 
+                          as.character(Picked)),
+         Picked = factor(Picked, levels = c("Past Pick - Winner", "Past Pick - Loser", 
+                                              "Future Pick", "Not Picked"))
+         )
+
+```
+
+Here is what our pick matrix looks like:
+
+```{r fig.height=7, fig.width=11}
+
+PicksDisplayDF %>%
+  ggplot(aes(Week, TeamID, fill = Picked)) +
+  geom_tile() +
+  geom_text(aes(label = percent(Post_Prob, accuracy = 1), color = Picked, size = Picked)) +
+  scale_fill_manual(values = c("black", "dark red", "dark blue", "white")) +
+  scale_color_manual(values = c("white", "white", "white", "black")) +
+  scale_size_manual(values = c(4, 4, 4, 4)) +
+  scale_x_continuous(breaks = seq(1:18)) +
+  scale_y_discrete(limits = rev(levels(PicksDisplayDF$TeamID))) +
+  theme_classic() +
+  theme(legend.position="none") +
+  labs(title = "NFL Survivor Pool Picks by Winning Probability",
+       subtitle = "Version 1 : Equal Weighting, 2 Picks Week 12, 1 Pick All Other Weeks",
+       y = "",
+       caption = "Black highlight indicates past winning pick, Red highlight means past losing pick")
+
+```
+
+This solution represents the highest cumulative probability of winning for the 18 weeks.
+
+Just to throw in a twist, there is a one time "Mulligan" option for the first 10 weeks in our pool where you can get back into the pool if your team looses; all prior picks still stand.
+
+Given this stipulation, we would consider giving greater weight to 11-18 where a loss is final.  That's just what we have done with this pick matrix:
+
+```{r fig.height=7, fig.width=11}
+
+# Because the pool rules allow for one loss and a re-entry in weeks 1:10 then the 
+# games in week 11:18 need to be weighted with higher importance
+
+# After Week 10, this code was edited to optimize only through the next 2 weeks beyond results
+
+# WeightingFactor = 2
+CapWeek = max(ResultDF$Week_Num) + 2
+
+costs_wg = ForecastDF %>%
+  filter(Week <= CapWeek) %>%
+#  mutate(Pre_Prob = if_else(Week > 10, Pre_Prob * WeightingFactor, Pre_Prob)) %>%
+  dplyr::select(TeamID, Week, Pre_Prob) %>%
+  mutate(Pre_Prob = if_else(is.na(Pre_Prob), 0, Pre_Prob)) %>%
+  pivot_wider(names_from = Week, values_from = Pre_Prob, values_fill = 0) %>%
+  as.matrix()
+rownames(costs_wg) = costs_wg[,1]
+costs_wg = costs_wg[,-1]
+
+# Customer constraints are = their demand  
+col.signs = rep("=", CapWeek)
+# In our case that's games demanded to win are 1 per weeks 1-11 and 13-16 plus 2 in week 12
+col.rhs = c(rep(1, 11), 2)
+AddWks = CapWeek - length(col.rhs)
+col.rhs = c(col.rhs, rep(1, AddWks))
+# Zero out for weeks already picked
+col.rhs = col.rhs * (!colnames(costs_wg) %in% complete_weeks)
+
+
+SolutionMatrix_wg = lp.transport(costs_wg, "max", row.signs, row.rhs, col.signs, col.rhs)$solution
+rownames(SolutionMatrix_wg) = rownames(costs_wg)
+colnames(SolutionMatrix_wg) = colnames(costs_wg)
+
+PicksDF_wg = SolutionMatrix_wg %>%
+  as_tibble() %>%
+  mutate(TeamID = rownames(SolutionMatrix)) %>%
+  dplyr::select(TeamID, everything()) %>%
+  pivot_longer(-TeamID, names_to = "Week", values_to = "Picked") %>%
+  filter(Picked > 0) %>%
+  mutate(Week = as.numeric(Week)) %>%
+  bind_rows(CompletedPicksDF) %>%
+  arrange(Week, TeamID)
+
+PicksDisplayDF_wg = ForecastDF %>%
+  dplyr::select(Week, TeamID, Post_Prob) %>%
+  left_join(PicksDF_wg, by = c("Week", "TeamID")) %>%
+  mutate(TeamID = factor(TeamID),
+         Picked = factor(
+           case_when(
+             Picked == -1 ~ "Past Pick - Winner",
+             Picked == 1 ~ "Future Pick",
+             TRUE ~ "Not Picked"), levels = c("Past Pick - Winner", "Past Pick - Loser", 
+                                              "Future Pick", "Not Picked"))) %>%
+  arrange(TeamID, Week) %>%
+  left_join(ResultDF, by = c("TeamID" = "TeamID", "Week" = "Week_Num")) %>%
+  mutate(TeamID = factor(TeamID),
+         Category = case_when(
+            Post_Prob > 0.5 & Result == "Loser" ~ "Upset", 
+            Post_Prob > 0.5 & Result == "Winner" ~ "Expected", 
+            Post_Prob < 0.5 & Result == "Loser" ~ "Expected",
+            Post_Prob < 0.5 & Result == "Winner" ~ "Upset",
+            TRUE ~ as.character("Future")) %>%
+              factor(levels = c("Expected", "Upset", "Future")),
+         Result = as.character(Result),
+         Result = if_else(is.na(Result), "Future", Result) %>%
+              factor(levels=c("Winner", "Loser", "Future")),
+         Picked = if_else(Picked == "Past Pick - Winner" & Result == "Loser", 
+                          "Past Pick - Loser", 
+                          as.character(Picked)),
+         Picked = factor(Picked, levels = c("Past Pick - Winner", "Past Pick - Loser", 
+                                              "Future Pick", "Not Picked"))
+         )
+
+PicksDisplayDF_wg %>%
+  ggplot(aes(Week, TeamID, fill = Picked)) +
+  geom_tile() +
+  geom_text(aes(label = percent(Post_Prob, accuracy = 1), color = Picked, size = Picked)) +
+  scale_fill_manual(values = c("black", "dark red", "dark green", "white")) +
+  scale_color_manual(values = c("white", "white", "white", "black")) +
+  scale_size_manual(values = c(4, 4, 4, 4)) +
+  scale_x_continuous(breaks = seq(1:18)) +
+  scale_y_discrete(limits = rev(levels(PicksDisplayDF$TeamID))) +
+  theme_classic() +
+  theme(legend.position="none") +
+  labs(title = "NFL Survivor Pool Picks by Winning Probability",
+       subtitle = "Version 2 : Maximizes Winning Probability at Current Week + 2",
+       y = "",
+       caption = "Black highlight indicates past winning pick, Red highlight means past losing pick")
+
+```
+
+Version 1 - No Weighting
+
+- Weeks 1-10 Mean Probability : `r percent(mean(filter(PicksDisplayDF, Picked %in% c("Past Pick - Winner", "Past Pick - Loser", "Future Pick") & Week <= 10)$Post_Prob), accuracy = .1)`
+
+- Weeks 11+ Mean Probability : `r percent(mean(filter(PicksDisplayDF, Picked %in% c("Past Pick - Winner", "Past Pick - Loser", "Future Pick") & Week >10)$Post_Prob), accuracy = .1)`
+
+Version 2 - Capped at Current Week +2
+
+- Weeks 1-10 Mean Probability : `r percent(mean(filter(PicksDisplayDF_wg, Picked %in% c("Past Pick - Winner", "Past Pick - Loser", "Future Pick") & Week <= 10)$Post_Prob), accuracy = .1)`
+
+- Weeks 11+ Mean Probability : `r percent(mean(filter(PicksDisplayDF_wg, Picked %in% c("Past Pick - Winner", "Past Pick - Loser", "Future Pick") & Week >10)$Post_Prob), accuracy = .1)`
+
+
+With all of this analytic power, what are the odds of surviving the entire regular season?  Not that great as it turns out:
+
+```{r}
+
+# Hey, you peaked at the code!
+# For your troubles, here is a nice article showing the typical survival odds given a pool size
+# https://www.teamrankings.com/nfl-survivor-pool-picks/articles/expected-length-of-nfl-survivor-pools/
+
+
+PicksDisplayDF %>%
+  mutate(Latest_Probability = if_else(Category != "Future", 1, Post_Prob)) %>%
+  filter(Picked != "Not Picked") %>%
+  arrange(Week) %>%
+  dplyr::select(Week, Post_Prob, Latest_Probability) %>%
+  rename(Pick_Probability = Post_Prob) %>%
+  mutate(Starting_Probability = percent(cumprod(Pick_Probability), accuracy = .1),
+         Latest_Probability = percent(cumprod(Latest_Probability), accuracy = .1),
+         Pick_Probability = percent(Pick_Probability, accuracy = .1)) %>%
+  kable("html", escape = FALSE,
+      caption = paste0('<p style="color:black; font-size:18px">',
+      '2021 NFL Schedule - Forecasted Probability (Unweighted Model)',
+      '</p>')) %>%
+  kable_styling("striped",
+                bootstrap_options = c("hover", "condensed"),
+                full_width = T) %>%
+  row_spec(0, color = "white", background = "black") 
+
+
+
+```
+
+Even making the best possible picks over the 18 weeks, there is less than a half percent chance of making it beyond week #16! 
+
+Speaking of results, let's look at the season to date probabilities versus the actual results.
+
+```{r fig.height=7, fig.width=11}
+
+UpsetString = PicksDisplayDF %>%
+  filter(Category != "Future") %>%
+  mutate(UpsetCount = if_else(Category == "Upset", 1, 0)) %>%
+  group_by(Week) %>%
+  summarize(UpsetRate = percent(sum(UpsetCount) / n()), .groups = "drop") %>%
+  pull(UpsetRate)
+
+UpsetString = paste(rep("Week ", length(UpsetString)), seq(1, length(UpsetString), by = 1), 
+                rep(": ", length(UpsetString)),
+                UpsetString,
+                rep(", ", length(UpsetString)), sep = "", collapse = "")
+
+PicksDisplayDF %>%
+  ggplot(aes(Week, TeamID, fill = Category)) +
+  geom_tile() +
+  geom_text(aes(label = percent(Post_Prob, accuracy = 1), color = Category)) +
+  scale_fill_manual(values = c("black", "dark red", "white")) +
+  scale_color_manual(values = c("white", "white", "grey30")) +
+  scale_size_manual(values = c(4, 4, 4)) +
+  scale_x_continuous(breaks = seq(1:18)) +
+  scale_y_discrete(limits = rev(levels(PicksDisplayDF$TeamID))) +
+  theme_classic() +
+  theme(legend.position="none") +
+  labs(title = "NFL Actual Results Versus Winning Probability",
+       subtitle = "Upsets in RED, Expected in BLACK, Future games not highlighted",
+       y = "",
+       caption = paste0("Upset Rate : ", UpsetString))
+
+```
+
+Finally, for some additional fun I have prepared a simple Underdog betting model.  For each week the model picks up to 2 teams that meet the following criteria.
+
+
+1. The model predicts that the team will win (has a probability of > 0.5) prior to considering that weeks' Vegas line.
+2. The model calculates the Estimated Return = The Model's Pre-Vegas Probability X The Vegas Money Line and chooses the top 2 that have positive returns. 
+
+```{r}
+# QA
+
+UnderDog_DF = ForecastDF %>%
+  mutate(Est_Return = Pre_Prob * ProbToLine(Vegas_Prob),
+         Vegas_Line = ProbToLine(Vegas_Prob)) %>%
+  dplyr::select(Week,TeamID, OppID, Pre_Prob, Vegas_Prob, Vegas_Line, Est_Return) %>%
+  filter(Vegas_Prob != 0 & Pre_Prob > 0.5 & Est_Return > 0) %>%
+  group_by(Week) %>%
+  slice_max(order_by = Est_Return, n = 2) %>%
+  inner_join(PicksDisplayDF %>%
+               dplyr::select(Week, TeamID, Result),
+             by = c("Week", "TeamID")) %>%
+  ungroup() %>%
+  mutate(ActualResult = case_when(
+          Result == "Winner" ~ Vegas_Line,
+          Result == "Loser" ~ -100,
+          TRUE ~ 0),
+         CumResult = cumsum(ActualResult))
+
+UnderDog_DF %>%
+  kable("html", escape = FALSE,
+      caption = paste0('<p style="color:black; font-size:18px">',
+      'Underdog Betting Model',
+      '</p>')) %>%
+  kable_styling("striped",
+                bootstrap_options = c("hover", "condensed"),
+                full_width = T) %>%
+  row_spec(0, color = "white", background = "black") 
+
+```
+
+I certainly wouldn't bet real money based on a relatively simple model but it's fun to track the results.
+
+In closing, enjoy the NFL season and..
+
+Choose your picks with savvy
+
+
