@@ -8,7 +8,6 @@ output:
     code_folding: hide        
 ---
 
-
 <span style="color:blue"><font size="3">Background : </font></span>
 There is often useful data that is only available via a text or PDF report.  This can be publicly available data on the internet or data from legacy systems that produce printable reports but do not allow access to the underlying data.
 
@@ -234,9 +233,3 @@ AllTables %>%
 ```
 
 I hope you are able to apply this to your own use case and unlock the value of data that is stored in legacy text and PDF reports.
-
-```{r include=FALSE}
-# Run All Block
-```
-
-
