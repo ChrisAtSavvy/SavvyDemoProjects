@@ -1,0 +1,580 @@
+---
+title: "NBA Points Gained Shooting Three Pointers"
+author: "Chris at Savvy Analtyics"
+output:
+  html_document:
+    df_print: paged
+    code_folding: hide    
+---
+
+At the Covid induced pause in the 2019-2020 NBA season, my favorite NBA team, the Indiana Pacers, seemed to loose a lot of their games to other teams who were better at the Three Point Shot.  
+
+Exactly how bad are the Pacers compared to other teams?
+
+While there are any number of published NBA stats we could turn to, I wanted to get creative and analyze this by incorporating some methods and metrics that are used on the PGA Tour plus some from the world of Finance.
+
+From the PGA Tour we will borrow the "Strokes Gained" metric (read about it here https://www.pgatour.com/news/2016/05/31/strokes-gained-defined.html) and apply it to Three Point shooting.  Essentially we will use the season-to-date NBA average points scored via three point shot per game as the baseline and evaluate each team against that running average.
+
+From the world of finance we will use a rate-volume analysis to see how many of those gained points are from volume (attempts) versus rate (percentage made).
+
+This article, like most on R-Pubs, is both instructional and investigative so we will be talking about how to write the code, get the data and display the charts as well as discussing the results.  To expose the R code just click on the "Code" button in the right margin to unhide it.
+
+```{r message=FALSE, warning=FALSE}
+# Load libraries, functions and clear environment
+
+rm(list=ls())
+options(scipen=999)
+suppressPackageStartupMessages({
+require(tidyverse)
+require(rvest)
+require(lubridate)
+require(scales)
+})
+
+# Create a function to return zero for null and blank values
+zna <- function(x) {
+  x <- ifelse(is.null(x), 0, 
+        ifelse(is.na(x), 0, 
+          ifelse(x == "", 0, x)))
+  return(x)
+}
+
+```
+
+Now for some good news / bad news about getting the data we need.
+
+Good News : There is a site with all of the data we need at basketball-reference.com.
+
+Bad News : Getting the data out of the site will require some web scrapping.
+
+Good News : The rvest library is up to the task.
+
+You will see several examples of searching for specific occurrences of html_nodes, html_attr, html_text and html_table in the code blocks below.
+
+All of those have to be scouted out manually by looking at an example page on your browser and right clicking "View Source" or better yet right clicking "Inspect" on the specific element you are looking for.  Let's look at one example which you can leverage to successfully mine this and other websites for data in the future.
+
+For this example we are looking at the Milwaukee Bucks 2020 schedule at:
+https://www.basketball-reference.com/teams/MIL/2020_games.html
+
+*Figure 1*
+![HTML Inspection](HTMLSourceDemo.png)
+
+In Figure 1 you can see the results of right clicking "Inspect" on the row containing the Bucks-Rockets game on 10/24/2019.  Therefore we know in the code block below we can find the Opponent Name string via this code:
+
+html_nodes('*[data-stat="opp_name"]') %>%
+    html_text()
+
+Which yields "Houston Rockets".
+
+Then we can find the date of the game in that same node in the "csk" attribute with:
+
+  html_nodes('*[data-stat="opp_name"]') %>%
+      html_attr("csk")
+
+Which yields "HOU2019-10-24"
+
+After some quick exploration of the website you can see that the hierarchy of the web pages is:
+
+1. Each season has the teams and rankings with links to each team's pages
+
+2. Each team page has the schedule with links to each game's page
+
+3. Each game's page contains the detailed performance stats we want
+
+So we will follow that hierarchy in gathering our data.
+
+**STEP 1 :** Use the season teams and rankings page to access each team's schedule and build a complete data frame of the schedule of every team in the league.
+```{r}
+
+# Load the 2020 standings page from Basketball Reference and scrape the 
+# team URL's from the league standings page
+
+
+# As of the end of the 2019-2020 season there were 1942 game records which, even at about 1 game per second takes awhile.  Therefore I ran this code and saved the data frame as a RDS file.  
+
+FullRefresh <- FALSE # Data pre-loaded to save run time.  You can choose to set FullRefresh to TRUE and run the block yourself
+
+if (FullRefresh) { 
+
+
+# Get the team 2020 URL from the href tags on ".left a" nodes on the page
+nba_team_urls <- "https://www.basketball-reference.com/leagues/NBA_2020.html" %>%
+  read_html() %>%
+  html_nodes(".left a") %>% 
+  html_attr("href")
+
+# Get the team name from the text in the ".left a" nodes on the page
+nba_team_names <- "https://www.basketball-reference.com/leagues/NBA_2020.html" %>%
+  read_html() %>%
+  html_nodes(".left a") %>% 
+  html_text()
+
+# The URL captured was the stats page so we need to modify it to be the game schedule page
+nba_team_urls <- paste0("https://www.basketball-reference.com", nba_team_urls) %>%
+  str_replace("2020", "2020_games")
+
+# Create an empty data frame to hold the schedule for each team
+nba_team_results <- data.frame(
+  team = as.character(),
+  schedule_url = as.character(),
+  date = as.character(),
+  opponent = as.character(),
+  location = as.character(),
+  results_url = as.character(),
+  stringsAsFactors = FALSE
+)
+
+# Loop through the teams load their schedule into the data frame
+for (i in 1:length(nba_team_urls)) {
+  # Get the url of the game results href link and add the site to make it a full url
+  results_url_vector <- nba_team_urls[i] %>%
+    read_html() %>%
+    html_nodes(".center a") %>% 
+    html_attr("href")
+  results_url_vector <- paste0("https://www.basketball-reference.com", 
+                               results_url_vector)
+  # Get the date from the appropriate node
+  results_date_vector <- nba_team_urls[i] %>%
+    read_html() %>%
+    html_nodes('*[data-stat="opp_name"]') %>%
+    html_attr("csk") %>%
+    str_extract("\\d\\d\\d\\d\\-\\d\\d\\-\\d\\d")
+  results_date_vector <- results_date_vector[!is.na(results_date_vector)]
+  # Get the opponent date from the appropriate node
+  results_opponent_vector <- nba_team_urls[i] %>%
+    read_html() %>%
+    html_nodes('*[data-stat="opp_name"]') %>%
+    html_text()
+  # Get the game location from the appropriate node and interpret the @ as an away game
+  results_location_vector <- nba_team_urls[i] %>%
+    read_html() %>%
+    html_nodes('*[data-stat="game_location"]') %>%
+    html_text()
+  results_location_vector <- results_location_vector[results_opponent_vector != "Opponent"]
+  results_location_vector <- ifelse(results_location_vector == "@", "Away", "Home")
+  results_opponent_vector <- results_opponent_vector[results_opponent_vector != "Opponent"]
+  # Take the vectors and assemble into to the empty temp data frame of current results
+  temp_df <- data.frame(
+    team = rep(nba_team_names[i], length(results_url_vector)),
+    schedule_url = rep(nba_team_urls[i], length(results_url_vector)),
+    date = results_date_vector,
+    opponent = results_opponent_vector,
+    location = results_location_vector,
+    results_url = results_url_vector,
+    stringsAsFactors = FALSE
+  )
+  # Append the temp data frame building the league schedule and results data frame
+  nba_team_results <- bind_rows(nba_team_results, temp_df)
+}
+
+# Re-class the game date as a proper date type
+nba_team_results <- nba_team_results %>%
+  mutate(date = as.Date(date, format = "%Y-%m-%d")) %>%
+  distinct()
+
+}
+
+```
+
+
+**STEP 2 :** Use the full league schedule we have built, complete with links to the game results pages, to drill down into those results pages and add game stats to each row of our data frame.
+```{r}
+
+# Again the data was pre-loaded to save time but you can choose to set FullRefresh to TRUE in the block above and run yourself
+
+if (FullRefresh) { 
+
+starttime <- Sys.time()
+
+# Create empty data frame to hold results
+nba_team_results <- nba_team_results %>%
+ mutate(MP = "",
+        FG = "",
+        FGA = "",
+        FGP = "",
+        TP = "",
+        TPA = "",
+        TPP = "",
+        FT = "",
+        FTA = "",
+        FTP = "",
+        ORB = "",
+        DRB = "",
+        TRB = "",
+        AST = "",
+        STL = "",
+        BLK = "",
+        TOV = "",
+        PF = "",
+        PTS = "",
+        MARGIN = "")
+
+# Loop through the schedule for each team and pull up the results page 
+lastprinted <- 0
+for (i in 1:nrow(nba_team_results)) {
+  # Use the table function to create a list of data frames for 
+  # each html table on the page 
+  temp_gamestats <- nba_team_results$results_url[i] %>%
+    read_html() %>%
+    html_table(fill = TRUE)
+  if (nba_team_results$location[i] == "Away") {
+    # For away games get the first table in the list
+    temp_gamestats <- temp_gamestats[[1]]
+    print(paste0("i = ", i, " ", 
+                 nba_team_results$team[i], " ", nba_team_results$team[i], 
+                 nba_team_results$location[i], " = Away vs ",
+                 nba_team_results$opponent[i]))
+  } else {
+    # For home games get the 15th table in the list
+    temp_gamestats <- temp_gamestats[[15]]
+    print(paste0("i = ", i, " ",
+                 nba_team_results$team[i], " ", nba_team_results$team[i], 
+                 nba_team_results$location[i], " = Not Away vs",
+                 nba_team_results$opponent[i]))  }
+  # Use the first row as column names
+  colnames(temp_gamestats) <- temp_gamestats[1,]
+  # Filter to just the team totals; ignore player stats
+  temp_gamestats <- temp_gamestats %>% 
+     filter(Starters == "Team Totals") %>%
+     rename("FGP" = "FG%",
+            TP = "3P",
+            TPA = "3PA",
+            TPP = "3P%",
+            FTP = "FT%",
+            MARGIN = "+/-")
+  # Apply the ZNA function to the stat fields to replace NA or blank values with zero
+  nba_team_results$MP[i] = zna(temp_gamestats$MP)
+  nba_team_results$FG[i] = zna(temp_gamestats$FG)
+  nba_team_results$FGA[i] = zna(temp_gamestats$FGA)
+  nba_team_results$FGP[i] = zna(temp_gamestats$FGP)
+  nba_team_results$TP[i] = zna(temp_gamestats$TP)
+  nba_team_results$TPA[i] = zna(temp_gamestats$TPA)
+  nba_team_results$TPP[i] = zna(temp_gamestats$TPP)
+  nba_team_results$FT[i] = zna(temp_gamestats$FT)
+  nba_team_results$FTA[i] = zna(temp_gamestats$FTA)
+  nba_team_results$FTP[i] = zna(temp_gamestats$FTP)
+  nba_team_results$ORB[i] = zna(temp_gamestats$ORG)
+  nba_team_results$DRB[i] = zna(temp_gamestats$DRB)
+  nba_team_results$TRB[i] = zna(temp_gamestats$TRB)
+  nba_team_results$AST[i] = zna(temp_gamestats$AST)
+  nba_team_results$STL[i] = zna(temp_gamestats$STL)
+  nba_team_results$BLK[i] = zna(temp_gamestats$BLK)
+  nba_team_results$TOV[i] = zna(temp_gamestats$TOV)
+  nba_team_results$PF[i] = zna(temp_gamestats$PF)
+  nba_team_results$PTS[i] = zna(temp_gamestats$PTS)
+  nba_team_results$MARGIN[i] = zna(temp_gamestats$MARGIN)  
+  # Print results every 50 pages to show progress as this runs for a long time
+  if (i > lastprinted + 50) {
+    print(paste0("Execution Time : ", difftime(Sys.time(), starttime)))
+    print(paste0("Record Number : ", i))
+    lastprinted <- lastprinted + 50
+  }
+  
+}
+
+# Re-class the character fields as numeric
+nba_team_results <- nba_team_results %>%
+  mutate(
+    MP = as.numeric(MP),
+    FG = as.numeric(FG),
+    FGA = as.numeric(FGA),
+    FGP = as.numeric(FGP),
+    TP = as.numeric(TP),
+    TPA = as.numeric(TPA),
+    TPP = as.numeric(TPP),
+    FT = as.numeric(FT),
+    FTA = as.numeric(FTA),
+    FTP = as.numeric(FTP),
+    ORB = as.numeric(ORB),
+    DRB = as.numeric(DRB),
+    TRB = as.numeric(TRB),
+    AST = as.numeric(AST),
+    STL = as.numeric(STL),
+    BLK = as.numeric(BLK),
+    TOV = as.numeric(TOV),
+    PF = as.numeric(PF),
+    PTS = as.numeric(PTS),
+    MARGIN = as.numeric(MARGIN))
+
+# Re-calc offensive rebounds
+ nba_team_results <- nba_team_results %>%   
+    mutate(ORB = TRB - DRB) 
+
+}
+
+```
+```{r include=FALSE}
+# One Time Code to Hide
+#
+
+# saveRDS(nba_team_results,"C:\\Users\\Chris.Woolery\\OneDrive\\codebanklocal\\democode\\nba_team_results.RDS")
+
+# saveRDS(nba_team_names,"C:\\Users\\Chris.Woolery\\OneDrive\\codebanklocal\\democode\\nba_team_names.RDS")
+
+nba_team_results <- readRDS("C:\\Users\\Chris.Woolery\\OneDrive\\codebanklocal\\democode\\nba_team_results.RDS")
+
+nba_team_names <- readRDS("C:\\Users\\Chris.Woolery\\OneDrive\\codebanklocal\\democode\\nba_team_names.RDS")
+
+```
+
+
+**STEP 3 :** Simple aggregation.  Now that we have our complete results and statistics we will calculate running totals as well as overall league averages so that comparisons can be made between each team and the league overall at any given point during the season.
+```{r}
+
+# Use the cumsum function to calculate the running totals for appropriate fields
+agg_team_day <- nba_team_results %>%
+  distinct() %>%
+  group_by(team) %>%
+  mutate(
+          RUNFG = cumsum(FG),
+          RUNFGA = cumsum(FGA),
+          RUNFGP = RUNFG / RUNFGA,
+          RUNTP = cumsum(TP),
+          RUNTPA = cumsum(TPA),
+          RUNTPP = RUNTP / RUNTPA,
+          RUNFT = cumsum(FT),
+          RUNFTA = cumsum(FTA),
+          RUNFTP = RUNFT / RUNFTA,
+          RUNORB = cumsum(ORB),
+          RUNDRB = cumsum(DRB),
+          RUNTRB = cumsum(TRB),
+          RUNAST = cumsum(AST),
+          RUNSTL = cumsum(STL),
+          RUNBLK = cumsum(BLK),
+          RUNTOV = cumsum(TOV),
+          RUNPF = cumsum(PF),
+          RUNPTS = cumsum(PTS)) %>%
+  ungroup() %>%
+  group_by(team) %>%
+  mutate(RunGames = row_number()) %>%
+  ungroup()
+
+# Create a league aggregate so that we can compare each team to the overall league on any given day; complete with running totals  
+agg_league_day <- agg_team_day %>%
+  group_by(date) %>%
+  summarise(NBAFG = sum(FG),
+          NBAFGA = sum(FGA),
+          NBAFGP = mean(FGA),
+          NBATP = sum(TP),
+          NBATPA = sum(TPA),
+          NBATPP = mean(TPP),
+          NBAFT = sum(FT),
+          NBAFTA = sum(FTA),
+          NBAFTP = mean(FTP),
+          NBAORB = sum(ORB),
+          NBADRB = sum(DRB),
+          NBATRB = sum(TRB),
+          NBAAST = sum(AST),
+          NBASTL = sum(STL),
+          NBABLK = sum(BLK),
+          NBATOV = sum(TOV),
+          NBAPF = sum(PF),
+          NBAPTS = sum(PTS),
+          NBAGames = n()) %>%
+  arrange(date) %>%
+  mutate(
+        NBARUNFG = cumsum(NBAFG),
+        NBARUNFGA = cumsum(NBAFGA),
+        NBARUNFGP = NBARUNFG / NBARUNFGA,
+        NBARUNTP = cumsum(NBATP),
+        NBARUNTPA = cumsum(NBATPA),
+        NBARUNTPP = NBARUNTP / NBARUNTPA,
+        NBARUNFT = cumsum(NBAFT),
+        NBARUNFTA = cumsum(NBAFTA),
+        NBARUNFTP = NBARUNFT / NBARUNFTA,
+        NBARUNORB = cumsum(NBAORB),
+        NBARUNDRB = cumsum(NBADRB),
+        NBARUNTRB = cumsum(NBATRB),
+        NBARUNAST = cumsum(NBAAST),
+        NBARUNSTL = cumsum(NBASTL),
+        NBARUNBLK = cumsum(NBABLK),
+        NBARUNTOV = cumsum(NBATOV),
+        NBARUNPF = cumsum(NBAPF),
+        NBARUNPTS = cumsum(NBAPTS),
+        NBARunGames = cumsum(NBAGames))
+
+```
+
+
+**STEP 4 :** Targeted aggregation where we build our "points gained" metrics
+
+Now that we have day by day totals and running totals for each team and the league at large we can calculate the points gained for each scoring cohort; Free Throws (FT), Two Pointers (DP) and Three Pointers (TP).
+
+Here is a non-code breakdown of how a few of the metrics are calculated.
+
+Points Gained Three Point Shooting : Each team's total points scored via three point shooting (made three point baskets X 3) is compared to the league average.  If the league averages 36 per game and a team averages 40 per game then that team's points gained is 4.  Conversely if a team averages 30 then that team's points gained is -6.
+
+(RUNTP / RunGames - NBARUNTP / NBARunGames) X 3
+
+Points Gained Three Point Shooting - Volume Driven : A team can score more points with the three point shot by either taking more shots (Volume) or making a higher percentage of the shots they take (Rate).  To isolate the volume we hold the rate constant. The team's attempts per game is compared to the league's and then multiplied by the league average.  This tells us how many points per game that team would gain versus the league if they made the same percentage of shots that the league does.
+
+((RUNTPA / RunGames - NBARUNTPA / NBARunGames) X NBARUNTPP) X 3
+
+Points Gained Three Point Shooting - Rate Driven : To isolate the rate we hold the volume constant. The team's make percentage per game is compared to the league's and then multiplied by the league average attempts.  This tells us how many points per game that team would gain versus the league if they attempted the same number of shots that the league does.
+
+((RUNTPP - NBARUNTPP) X NBARUNTPA / NBARunGames) X 3
+```{r}
+
+agg_team_points_gained <- agg_team_day %>%
+  dplyr::select(team, date, opponent, RUNFG, RUNFGA, RUNFGP, 
+                RUNTP, RUNTPA, RUNTPP, RUNFT, RUNFTA, RUNFTP, RunGames) %>%
+  inner_join(agg_league_day %>%
+               dplyr::select(date, NBARUNFG, NBARUNFGA, NBARUNFGP, 
+                NBARUNTP, NBARUNTPA, NBARUNTPP, NBARUNFT, NBARUNFTA, 
+                NBARUNFTP, NBARunGames), by = c("date")) %>%
+  mutate(RunPointsGainedDGTot = ((RUNFG - RUNTP) / RunGames 
+                                 - (NBARUNFG - NBARUNTP) / NBARunGames) * 2,
+         RunPointsGainedDGVol = (((RUNFGA - RUNTPA) / RunGames 
+                                  - (NBARUNFGA - NBARUNTPA) / 
+                                 NBARunGames) * NBARUNFGP) * 2,
+         RunPointsGainedDGRate = ((((RUNFGA - RUNTPA) / (RUNFG - RUNTP))
+                                   - ((NBARUNFGA - NBARUNTPA) / 
+                                        (NBARUNFG - NBARUNTP))) 
+                                  * (NBARUNFGA - NBARUNTPA) / NBARunGames) * 2,
+         
+         
+         RunPointsGainedTPTot = (RUNTP / RunGames - NBARUNTP / NBARunGames) * 3,
+         RunPointsGainedTPVol = ((RUNTPA / RunGames - NBARUNTPA / 
+                                 NBARunGames) * NBARUNTPP) * 3,
+         RunPointsGainedTPRate = ((RUNTPP - NBARUNTPP) * NBARUNTPA / NBARunGames) * 3,
+         RunPointsGainedFTTot = RUNFT / RunGames - NBARUNFT / NBARunGames,
+         RunPointsGainedFTVol = (RUNFTA / RunGames - NBARUNFTA / 
+                                NBARunGames) * NBARUNFTP,
+         RunPointsGainedFTRate = (RUNFTP - NBARUNFTP) * NBARUNFTA / NBARunGames)
+
+```
+
+**FINAL STEP : Visualize**
+
+Now we are ready to visualize some results.  Let's start by looking at the points generated by the three point shot has trended or the season across the league.  
+
+The chart starts on 11/15 to so that the league has a chance to build enough data to eliminate wild swings in this per-game metric.
+
+```{r fig.width=10}
+
+agg_team_points_gained %>%
+  filter(date >= as.Date('2019-11-15')) %>%
+  mutate(TPPG = NBARUNTP * 3 / NBARunGames) %>%
+  ggplot(aes(date, TPPG)) +
+  geom_line(color = "#990000", size = 3) +
+  theme_classic() +
+  theme(axis.text = element_text(size = 12, color = "black"),
+        axis.title = element_text(size = 12, color = "black"))  +
+  labs(title = "NBA Points Per Game - Three Point Shooting",
+       subtitle = "Running Average",
+       x = "",
+       y = "NBA Points Per Game - Three Point Shooting")
+
+ 
+
+```
+
+Teams got slightly better at 3 point scoring as the season progressed!  On average they were scoring 2 more points per game when the season paused than they were on November 15th.
+
+Now that we have established the league average we can investigate our "Points Gained" metric.
+
+Showing all 30 teams in the NBA would be a busy chart so we will compare our Pacers to the other Eastern Conference playoff contenders.  
+
+```{r fig.width=10}
+
+agg_team_points_gained %>%
+  filter(team %in% nba_team_names[1:8]) %>%
+  group_by(team) %>%
+  mutate(maxdate = max(date)) %>%
+  filter(date == maxdate) %>%
+  ggplot(aes(reorder(team, RunPointsGainedTPTot), RunPointsGainedTPTot)) +
+  geom_col(fill = "#000044") +
+  geom_label(aes(label=round(RunPointsGainedTPTot,1))) +
+  theme_classic() +
+  theme(axis.text = element_text(size = 12, color = "black"),
+        axis.title = element_text(size = 12, color = "black"))  +
+  coord_flip() +
+  labs(title = "Eastern Conference 2019-2020 Playoff Contenders",
+       subtitle = "Points Gained - Three Point Shooting",
+       x = "",
+       y = "Points Gained - Three Point Shooting")
+
+```
+
+If you are a Pacer fan, this chart is no surprise.  The Pacers are dead last on the list of the top 8 teams in the conference.  How has this trended over the season?
+
+```{r fig.width=10}
+
+agg_team_points_gained %>%
+  filter(team == "Indiana Pacers" &
+         date >= as.Date('2019-11-15')) %>%
+  ggplot(aes(date, RunPointsGainedTPTot)) +
+  geom_line(color = "#000044", size = 3) +
+  theme_classic() +
+  theme(axis.text = element_text(size = 12, color = "black"),
+        axis.title = element_text(size = 12, color = "black"))  +
+  labs(title = "Points Gained - Three Point Shooting",
+       subtitle = "Indiana Pacers",
+       x = "",
+       y = "Points Gained - Three Point Shooting vs League Average")
+
+```
+
+Here we can see a season long comparison of the Pacers versus the league.  We already know that the league has a steady gain across the season of 2+ points.  The Pacers rapidly made up over 4 points per game, stall out and then lose some ground starting in late January.
+
+This drop coincides with Victor Oladipo's return but we won't be exploring any causality in this analysis.
+
+Finally let's look at how much of the Pacer's three point shooting performance is rate driven versus volume driven.
+
+```{r fig.width=10}
+
+# Create a key of names and fill colors so that we can create a manual legend
+Key <- c("Total" = "light grey", "Volume Driven" = "#000044", "Rate Driven" = "blue")
+
+# Isolate the Three Point Volume and plot it
+agg_team_points_gained %>%
+  filter(team %in% nba_team_names[1:8]) %>%
+  group_by(team) %>%
+  mutate(maxdate = max(date)) %>%
+  filter(date == maxdate) %>%
+  # Base plot is total points
+  ggplot(aes(reorder(team, RunPointsGainedTPTot), RunPointsGainedTPTot)) +
+  geom_col(aes(reorder(team, RunPointsGainedTPTot), RunPointsGainedTPTot, 
+           fill = "Total")) +
+  # Add Volume plot
+  geom_col(aes(reorder(team, RunPointsGainedTPTot), RunPointsGainedTPVol, 
+           fill = "Volume Driven"), width = .2, position = position_nudge(x = 0.2)) +
+  geom_label(aes(reorder(team, RunPointsGainedTPTot), RunPointsGainedTPVol,
+                 label=round(RunPointsGainedTPVol,1)), 
+             position = position_nudge(x = 0.2)) +
+  # Add Rate Plot
+  geom_col(aes(reorder(team, RunPointsGainedTPTot), RunPointsGainedTPRate, 
+           fill = "Rate Driven"), width = .2, position = position_nudge(x = -0.2)) +
+  geom_label(aes(reorder(team, RunPointsGainedTPTot), RunPointsGainedTPRate,
+                 label=round(RunPointsGainedTPRate,1)), 
+             position = position_nudge(x = -0.2)) +
+  scale_fill_manual(name = "", values = Key) +
+  theme_classic() +
+  theme(axis.text = element_text(size = 12, color = "black"),
+        axis.title = element_text(size = 12, color = "black"))  +
+  coord_flip() +
+  labs(title = "Eastern Conference 2019-2020 Playoff Contenders",
+       subtitle = "Points Gained - Three Point Shooting by Driver",
+       x = "",
+       y = "Points Gained - Three Point Shooting")
+
+```
+
+The Pacers loose about 6.5 points per game to the league and we can see that ALL of that is due to volume (0.45 gained by rate - 6.92 lost by volume = 6.47).  
+
+It's interesting to compare the rate and volume of the top teams in the conference and see some of the outliers.  
+
+- The Pacers deficit in shot attempts
+- The Nets deficit in shot percentage
+- The Raptors are good at both
+- The Bucks just take more shots
+
+I hope you have enjoyed this look at "Points Gained".
+
+Be Savvy.
+
+
+```{r include=FALSE}
+
+```
+

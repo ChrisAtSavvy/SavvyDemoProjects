@@ -1,0 +1,239 @@
+---
+title: "Mining Data From PDF Files with R"
+subtitle: "An Examination of US Housing Statistics"
+author: "by : Chris at Savvy Analytics"
+output:
+  html_document:
+    df_print: paged
+---
+
+
+<span style="color:blue"><font size="3">Background : </font></span>
+There is often useful data that is only available via a text or PDF report.  This can be publicly available data on the internet or data from legacy systems that produce printable reports but do not allow access to the underlying data.
+
+<span style="color:blue"><font size="3">Goal : </font></span>
+Rather than retype this data, let's build a pipeline to get the data into a usable format that can be used for further analysis.  
+
+This will be a tutorial on the basics so that you can build a data extraction pipeline for your own purpose.
+
+As usual, let's start by clearing the environment and loading the packages required.
+
+```{r warning=FALSE, message=FALSE}
+# Optional memory clear
+rm(list=ls())
+# Disable Scientific Notation in printing
+options(scipen=999)
+# Load libraries
+require(tidyverse)
+require(pdftools)
+require(lubridate)
+require(kableExtra)
+```
+
+For this demonstration we are going to load a PDF data source that everyone can access for themselves.  The US Census New Residential Construction Report
+
+```{r}
+# Load the latest US Census New Residential Construction Report
+rawfile <- "https://www.census.gov/construction/nrc/pdf/newresconst.pdf"
+```
+
+Here is a snapshot of some of the data tables in the PDF that we will be extracting.
+
+![](c:/Users/Chris.Woolery/OneDrive/codebanklocal/democode/PDFDemo.png)
+
+It would be great if a R package could magically interpret all of the ways that data is reported and automatically break it down into usable data frames but that currently doesn't exist.
+
+While the PDF tools package does have the capability to attempt to read PDF data tables, I have found the results to be inconsistent.  There are also a lot of PDF and text based reports that simply do not have data in structured tables so I'm going to demonstrate a method that can be used with a wide variety of report styles.
+
+The "pdf_text" function from the PDFTools package will read the file into a data frame with 1 text field per row with one row for every line in the report.
+
+```{r}
+# Extract the PDF using PDF Tools into a dataframe
+# with one raw text field for each line
+rawlines <- pdf_text(rawfile) %>%
+  read_lines() %>%
+  data.frame() %>%
+  rename(rawline = 1)
+
+```
+
+Here is a snapshot from the new rawlines data frame showing five rows of one of the data sections of the PDF in extracted text format.
+
+```{r echo=FALSE}
+rawlines[87:92,] %>%
+  kable() %>%
+  kable_styling("striped") %>%
+  row_spec(0, color = "white", background = "black")
+```
+
+The next step is to break that raw text out into useful fields.  We will use data manipulation functions from the tidyverse group of libraries along with regular expressions to isolate the text we want in each line.
+
+Every report will typically consist of:
+Sections : Each section may have unique data points and formats
+Header : Data points that apply to all detail lines below it
+Detail : A unique row of data containing several fields
+Footer : Data points that apply to all detail lines above it
+
+Therefore a good process is to:
+
+1. Identify text that starts a section and create a field identifying the section.  Once the sections labels are identified, use the fill function to copy them to each line until the new section starts.
+
+2. Identify header text that pertains to a section of detail lines below it.  In a list of students and enrolled classes, it would be the student name.  Once identified, again use the fill function to copy the values down.
+
+3. Identify detail text.  In a list of students and enrolled classes, these would be one line per enrolled class.  Same use of the fill function.
+
+4. Identify footer text that pertains to a section of detail lines above it.  In a list of students and enrolled classes it might be total hours and classes enrolled.  This time the fill function would be used to fill the values up instead of down.
+
+
+Extracting text with regular expressions:
+Using str_extract or str_detect, you can extract or detect targeted text as needed.  You will see several examples below but your use case will have its' own unique quirks.  
+
+To test and implement these I recommend https://regex101.com/ where you can use the clip board to drop in sections of your data frame and use trial and error to get the desired result before coding it.  Note that you will need to use two "\\\" in R versus one "\\" on regex101.   
+
+Another great resource is the stringR cheat sheet at https://rstudio.com/resources/cheatsheets/ 
+
+You can use this same method for unformatted text based reports; you won't even need the PDFTools package.
+
+Now we'll dig into the detail.
+
+```{r warning=FALSE, message=FALSE, results='hide'}
+
+# RegEx Quick Usefull Functions :
+# E.g. match/extract characters 89-91 from a row
+#   (?<=.{88}).{3}
+# E.g. match/extract 4 characters after "Dept:" and 10 characters
+#   ?<=(Dept:.{10})).{4}
+# E.g. match/extract 6 numbers with 1 space before and after
+#   (?<=\\s)\\d\\d\\d\\d\\d\\d(?=\\s)
+# E.g. match/extract all characters between a phone # and EOL
+#   (?<=(\\d\\d\\d-\\d\\d\\d\\d)).*$
+
+# The report consists of different sections each with unique structure
+# Identify the sections :
+wiplines <- rawlines %>%
+  mutate(SectionID = 
+          case_when(
+           str_detect(rawline, "^Table 1a") ~ "Authorized-Adjusted",
+           str_detect(rawline, "^Table 1b") ~ "Authorized-Unadjusted",
+           str_detect(rawline, "^Table 2a") ~ "NotStarted-Adjusted",
+           str_detect(rawline, "^Table 2b") ~ "NotStarted-Unadjusted",
+           str_detect(rawline, "^Table 3a") ~ "Started-Adjusted",
+           str_detect(rawline, "^Table 3b") ~ "Started-Unadjusted",
+           str_detect(rawline, "^Table 4a") ~ "UnderConstruction-Adjusted",
+           str_detect(rawline, "^Table 4b") ~ "UnderConstruction-Unadjusted",
+           str_detect(rawline, "^Table 5a") ~ "Completed-Adjusted",
+           str_detect(rawline, "^Table 5b") ~ "Completed-Unadjusted")) %>%
+  fill(SectionID)
+
+# Extract The Date of the Report from the beginning section
+# It wasn't useful in this example but it can be if you extract new 
+# versions monthly and you want to store them in a single table
+DateString <- str_extract(rawlines$rawline, "(?<=MONTHLY NEW RESIDENTIAL CONSTRUCTION, ).*$")
+DateString <- paste0("01 ",DateString[!is.na(DateString)])
+ReportDate <- as.Date(DateString, format="%d %B %Y")
+
+# Create a custom function to extract commas from number strings and convert
+fixcomma <- function(commaamount) {
+  as.numeric(str_replace_all(commaamount, ",", ""))
+}
+
+# Create a regular expression string of valid month names
+AnyMonth <- "(January)|(February)|(March)|(April)|(May)|(June)|(July)|(August)|(September)|(October)|(November)|(December)"
+
+#  If sections were in variant formats then you would need to add
+#  a filter here for the table and then, if desired merge the tables
+#  into a common format at the end.  For this example, we are fortunate
+#  that all sections are in the same format
+AllTables <- wiplines %>%
+  mutate(# Extract the month name if it matches one of the values in the AnyMonth RegEx
+         Period = str_extract(rawline, AnyMonth),
+         # Extract any data where the first 4 characters of the row are numbers
+         Year = str_extract(rawline, "^\\d\\d\\d\\d"),
+         # Extract any 6 characters after the first 65 characters in arow
+         # use the fixcomma function we created above to convert it to a number
+         # we were able to extract all data by position from the start of the line
+         USTot = ifelse(!is.na(Period),
+                       fixcomma(str_extract(rawline, "(?<=^.{65}).{6}")),
+                       NA),
+         US1u = ifelse(!is.na(Period),
+                       fixcomma(str_extract(rawline, "(?<=^.{75}).{6}")),
+                       NA),
+         US2_4u = ifelse(!is.na(Period),
+                       fixcomma(str_extract(rawline, "(?<=^.{85}).{6}")),
+                       NA),
+         US5u = ifelse(!is.na(Period),
+                       fixcomma(str_extract(rawline, "(?<=^.{94}).{6}")),
+                       NA),
+         NWTot = ifelse(!is.na(Period),
+                       fixcomma(str_extract(rawline, "(?<=^.{101}).{6}")),
+                       NA),
+         NW1u = ifelse(!is.na(Period),
+                       fixcomma(str_extract(rawline, "(?<=^.{112}).{6}")),
+                       NA),
+         MWTot = ifelse(!is.na(Period),
+                       fixcomma(str_extract(rawline, "(?<=^.{121}).{6}")),
+                       NA),
+         MW1u = ifelse(!is.na(Period),
+                       fixcomma(str_extract(rawline, "(?<=^.{130}).{6}")),
+                       NA),
+         STot = ifelse(!is.na(Period),
+                       fixcomma(str_extract(rawline, "(?<=^.{139}).{6}")),
+                       NA),
+         S1u = ifelse(!is.na(Period),
+                       fixcomma(str_extract(rawline, "(?<=^.{150}).{6}")),
+                       NA),
+         WTot = ifelse(!is.na(Period),
+                       fixcomma(str_extract(rawline, "(?<=^.{159}).{6}")),
+                       NA),
+         W1u = ifelse(!is.na(Period),
+                       fixcomma(str_extract(rawline, "(?<=^.{170}).{6}")),
+                       NA),
+         # We need to determine which rows are the detail as we will use the 
+         # fill function to copy all section, header and footer data down or
+         # up to the detail rows and then eliminate all other rows
+         IsDetail = ifelse(!is.na(Period) & !is.na(USTot), TRUE, FALSE)) %>%
+  # The year functions as a header to the monthly detail so we fill-down
+  fill(Year, .direction = c("down")) %>%
+  # All relevant data has been copied to the detail rows; the extras can be removed 
+  filter(IsDetail) %>%
+  # We will create a Month Beginning column for proper date sorting of the 
+  # detail month and eliminate fields we do not need
+  mutate(MonthBeg = as.Date(paste0(Period, " 01 ", Year), format="%B %d %Y")) %>%
+  dplyr::select(-rawline, -IsDetail, -Period, -Year) %>%
+  dplyr::select(SectionID, MonthBeg, everything())
+
+
+```
+
+Now we have a nice tidy 129 row data frame of our data; here a few of the rows.
+
+```{r echo=FALSE, fig.width=10}
+AllTables[1:8,] %>%
+  kable() %>%
+  kable_styling("striped") %>%
+  row_spec(0, color = "white", background = "black")
+```
+
+Now we can plot it, store it and generally go crazy with analytics.
+
+```{r fig.width=10}
+AllTables %>%
+  filter(SectionID == "Started-Adjusted" | SectionID == "Completed-Adjusted") %>%
+  ggplot(aes(MonthBeg, USTot, color = SectionID)) +
+  geom_line(size = 3) +
+  scale_color_manual(values = c("green", "blue")) +
+  theme_classic() +
+  labs(title = "US Housing - Starts vs Completions",
+       x = "Month",
+       y = "Housing Starts - Thousands",
+       color = "Type")
+
+```
+
+I hope you are able to apply this to your own use case and unlock the value of data that is stored in legacy text and PDF reports.
+
+```{r include=FALSE}
+# Run All Block
+```
+
+

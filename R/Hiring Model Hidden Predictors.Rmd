@@ -1,0 +1,570 @@
+---
+title: "Finding Hidden Predictors For Better Hiring Decisions"
+author: "Chris at Savy Analytics"
+output: 
+  ioslides_presentation :
+    widescreen: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## Overview
+#### Machine learning for practical prediction and analysis
+<font size="3">Machine learning isn't just for serving up Ads on the internet or predicting your viewing preferences on Netflix.  
+
+It can be a powerful tool for common business tasks.  In this example we will see how it can be applied to rank job applicants</font>
+
+#### Demonstration
+<font size="3">We created some data for new hire candidates that shows their answers to job application questions along how they were rated by an interviewer.  These employees were hired for a 60 day probationary period.  Those who were made offers after the probationary period are labeled as "Good Hires" while those terminated are labeled as "Bad Hires"
+
+First we will try descriptive analytics and then we will utilize predictive models to demonstrate how they can find answers hidden in the data</font>
+
+
+```{r include=FALSE}
+## Libraries and Custom Functions
+
+# Optional memory clear
+rm(list=ls())
+# Disable Scientific Notation in printing
+options(scipen=999)
+
+# Load libraries
+library(tidyverse)
+library(caret)
+library(lubridate)
+library(scales)
+library(pROC)
+
+```
+
+```{r include=FALSE}
+# Load Data
+RawHistFile = "https://raw.githubusercontent.com/ChrisAtSavvy/SavvyDemoProjects/main/R/Hiring%20Model%20Hidden%20Predictors.csv"
+
+rawhist = read_csv(RawHistFile, col_names = TRUE, col_types = "cccccccn")
+
+wiphist <- rawhist %>%
+  rename(result = 1, priorwelding = 2, shiftpref = 3, multijobs = 4,
+         techschool = 5, contract = 6, licensed = 7, intrating = 8) %>%
+  mutate(result = factor(result, levels = c("Good Hire", "Bad Hire")),
+         priorwelding = factor(priorwelding, levels = c("Yes", "No")),
+         shiftpref = factor(shiftpref, levels = c("First", "Second")),
+         multijobs = factor(multijobs, levels = c("Yes", "No")),
+         techschool = factor(techschool, levels = c("Yes", "No")),
+         contract = factor(contract, levels = c("Yes", "No")),
+         licensed = factor(licensed, levels = c("Yes", "No"))
+         )
+
+```
+
+```{r include=FALSE}
+
+# Create a 70/30 train/test partition that maintains the proportion
+# of the result field
+# Step 1 create an index
+set.seed(32984)
+testtrainindex <- createDataPartition(wiphist$result, times = 1,
+                               p = 0.70, list = FALSE)
+
+# Step 2 assign the index to a field called setname
+wiphist <- wiphist %>%
+  mutate(rowID = as.numeric(row.names(wiphist))) %>%
+  mutate(setname = as.factor(ifelse(rowID %in% testtrainindex, "train", "test"))) %>%
+  dplyr::select(-rowID)
+
+# Step 3 create test and train datasets
+train <- wiphist %>%
+  filter(setname == "train") %>%
+  dplyr::select(-setname)
+
+test <- wiphist %>%
+  filter(setname == "test") %>%
+  dplyr::select(-setname)
+
+# Step 4 center and scale the test/train datasets seperately since that's how
+# the live data will be introduced to center and scale
+# Commenting this out as it actually decresed model accuracy from 82% to 76%
+#train <- preProcess(train, method = c("center", "scale")) %>%
+#     predict(train)
+#test <- preProcess(test, method = c("center", "scale")) %>%
+#     predict(test)
+
+# Step 5 set cross validation parameters.  Used K of 5 since dividing a 600 case
+# training set into more folds would be fewer than 100 per fold
+set.seed(32984)
+cv.folds <- createMultiFolds(train$result, k = 5, times = 4)
+
+cv.cntrl <- trainControl(method = "repeatedcv", number = 5,
+                         repeats = 4, index = cv.folds)
+
+```
+
+```{r include=FALSE}
+# Create empty data frames to hold results from various models
+
+detail_matrix <- data.frame(
+  "Model" = as.character(),
+  "ROWID" = as.numeric(),
+  "Truth" = as.character(), 
+  "Pred" = as.character(),
+  "Score" = as.numeric())
+
+summary_matrix <- data.frame(
+  "Model" = as.character(),
+  "Accuracy" = as.numeric(),
+  "Sensitivity" = as.numeric(),
+  "Specificity" = as.numeric(),
+  "ROC AUC" = as.numeric()
+)
+
+```
+
+```{r include=FALSE}
+# RPart (Simple Tree) Model Results
+# Create model
+rpmodel <- train(result ~ ., data = train, method = "rpart", 
+                    trControl = cv.cntrl)
+
+# Predict for the test data and render the probability of the positive class
+rppred <- predict(rpmodel, test, type = "prob")[,1]
+
+detail_matrix <- filter(detail_matrix, Model != "RP")
+
+detail_matrix <- rbind(detail_matrix,data.frame(
+  "Model" = as.character(rep("RP", nrow(test))),
+  "ROWID" = rep(1:nrow(test)),
+  "Truth" = factor(test$result, 
+                   levels = c("Good Hire", "Bad Hire")), 
+  "Pred" = factor(ifelse(rppred > 0.7, "Good Hire", "Bad Hire"), 
+                   levels = c("Good Hire", "Bad Hire")),
+  "Score" = as.numeric(rppred)))
+
+cm <- confusionMatrix(filter(detail_matrix, Model == "RP")$Pred, 
+                            filter(detail_matrix, Model == "RP")$Truth, 
+                            positive="Good Hire")
+
+roc <- roc(
+  filter(detail_matrix, Model == "RP")$Truth,
+  filter(detail_matrix, Model == "RP")$Score
+	)
+
+summary_matrix <- filter(summary_matrix, Model != "RP")
+
+summary_matrix <- rbind(summary_matrix,(data.frame(
+  "Model" = as.character("RP"),
+  "Accuracy" = as.numeric(cm$overall[1]),
+  "Sensitivity" = as.numeric(cm$byClass[1]),
+  "Specificity" = as.numeric(cm$byClass[2]),
+  "ROC AUC" = as.numeric(roc$auc),
+  stringsAsFactors = FALSE
+)))
+
+
+```
+
+```{r include=FALSE}
+# RF Model Results
+
+# Create model
+rfmodel <- train(result ~ ., data = train, method = "rf", 
+                    trControl = cv.cntrl)
+
+# Predict for the test data and render the probability of the positive class
+rfpred <- predict(rfmodel, test, type = "prob")[,1]
+
+
+detail_matrix <- filter(detail_matrix, Model != "RF")
+
+detail_matrix <- rbind(detail_matrix,data.frame(
+  "Model" = as.character(rep("RF", nrow(test))),
+  "ROWID" = rep(1:nrow(test)),
+  "Truth" = as.character(test$result), 
+  "Pred" = as.character(ifelse(rfpred > 0.5, "Good Hire", "Bad Hire")),
+  "Score" = as.numeric(rfpred)))
+
+cm <- confusionMatrix(filter(detail_matrix, Model == "RF")$Pred, 
+                            filter(detail_matrix, Model == "RF")$Truth, 
+                            positive="Good Hire")
+
+roc <- roc(
+  filter(detail_matrix, Model == "RF")$Truth,
+  filter(detail_matrix, Model == "RF")$Score
+	)
+
+summary_matrix <- filter(summary_matrix, Model != "RF")
+
+summary_matrix <- rbind(summary_matrix,(data.frame(
+  "Model" = as.character("RF"),
+  "Accuracy" = as.numeric(cm$overall[1]),
+  "Sensitivity" = as.numeric(cm$byClass[1]),
+  "Specificity" = as.numeric(cm$byClass[2]),
+  "ROC AUC" = as.numeric(roc$auc),
+  stringsAsFactors = FALSE
+)))
+
+
+```
+
+```{r include=FALSE}
+summary_matrix 
+
+```
+
+## Predictors Used
+<font size="4">priorwelding          : Prior experience Yes/No  
+shiftpref          : Shift preference First/Last  
+multijobs          : Had > 1 job in prior 3 years Yes/No  
+techschool         : Tech school degree Yes/No  
+contract           : Prior contract work Yes/No  
+licensed           : Licensed in another state Yes/No  
+intrating          : Interviewer rating Numeric  </font> 
+
+## Descriptive Results - Overview
+```{r fig.width=10}
+summaryvisdata <- wiphist %>%
+  group_by(setname) %>%
+  mutate(setn = n()) %>%
+  ungroup() %>%
+  group_by(setname, result, setn) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  mutate(positivepercent = round(n / setn, 3))
+
+summaryvisdata %>%
+  group_by(result) %>%
+  summarise(n = sum(n)) %>%
+  ggplot(aes(result, n, fill = result)) +
+  geom_col() +
+  geom_label(aes(label = n), fill = "white", size = 4) +
+  scale_fill_manual(values = c("light green", "dark grey")) +
+  coord_flip() +
+  labs(title = "New Hire Results After Probationary Period",
+       fill = "Result",
+       x = "", 
+       y = "Employee Count")
+
+```
+
+<span style="color:black"><font size="2">The data shows that we have an even balance of good and bad hires</font></span>
+
+
+```{r fig.width=10}
+# Create an empty data frame to hold the results
+resultsbyvalue <- data.frame(
+  "predictor" = as.character(),
+  "predtype" = as.character(),
+  "value" = as.character(),
+  "n" = as.numeric(),
+  "positivepercent" = as.numeric(),
+  stringsAsFactors = FALSE
+)
+
+# Create a set with both test and train data
+alldata <- bind_rows(train, test)
+
+# Get class (factor or numeric) for each field
+alldata_class <- sapply(alldata, class)
+# Get factor levels for each field (non-factor will yield NA)
+alldata_levels <- sapply(alldata, levels)
+
+# Evalutae factor/discreeet fields
+# Cycle through factor fields, (field 1 is results so for loop starts at 2)
+for (i in 2:length(alldata)) {
+  if (alldata_class[i] == "factor") {
+    for (j in seq_along(alldata_levels[[i]])) {
+      temppredictor <- colnames(alldata)[i]
+      temppredtype <- "factor"
+      tempvalue <- paste(colnames(alldata)[i],
+                         alldata_levels[[i]][j],
+                         sep = " | "
+                   )
+      tempn <- nrow(filter(alldata, alldata[, i] == alldata_levels[[i]][j]))
+      temppp <- nrow(filter(alldata, alldata[, i] == alldata_levels[[i]][j] &
+                              alldata$result == "Good Hire")) /
+                nrow(filter(alldata, alldata[, i] == alldata_levels[[i]][j]))
+      resultsbyvalue <- bind_rows(resultsbyvalue,data.frame(
+                                  "predictor" = temppredictor,
+                                  "predtype" = temppredtype,
+                                  "value" = as.character(tempvalue),
+                                  "n" = as.numeric(tempn),
+                                  "positivepercent" = as.numeric(temppp),
+                                  stringsAsFactors = FALSE))
+    }
+  }
+}
+
+# Evalutae numeric/continuous fields
+
+# filter the alldataing data down to result plus just numeric fields
+alldata_nums <- bind_cols(alldata[,1], select_if(alldata, is.numeric))
+# Create a data frame of standard quantiles 0,25,50,75,100 for the numeric fields
+alldata_quantiles <- sapply(alldata_nums[2:length(alldata_nums)], quantile) %>%
+  data.frame() %>%
+  rownames_to_column("quantile") %>%
+  mutate(quantile = case_when(
+    quantile == "0%" ~ "Q1",
+    quantile == "25%" ~ "Q2",
+    quantile == "50%" ~ "Q3",
+    quantile == "75%" ~ "Q4",
+    TRUE ~ "Max"
+  ))
+
+# Cycle through factor fields, (field 1 is results so for loop starts at 2)
+# Inner (field loop) starts at 2 because field 1 in the quantile frame is the quantile 
+for (i in 2:length(alldata_nums)) {
+  for (j in 2:nrow(alldata_quantiles)) {
+     temppredictor <- colnames(alldata_nums)[i]
+     temppredtype <- "numeric"
+     tempvalue <- paste0(colnames(alldata_nums)[i],
+                        " | ",
+                        alldata_quantiles$quantile[j-1],
+                        " | ",
+                        round(alldata_quantiles[j-1,i],0),
+                        "-",
+                        round(alldata_quantiles[j,i],0))
+     tempn <- nrow(filter(alldata_nums, alldata_nums[, i] >= alldata_quantiles[j-1,i] &
+                            alldata_nums[, i] < alldata_quantiles[j,i]))
+     temppp <- nrow(filter(alldata_nums, alldata_nums[, i] >= alldata_quantiles[j-1,i] &
+                            alldata_nums[, i] < alldata_quantiles[j,i] &
+                   alldata_nums$result == "Good Hire")) /
+       nrow(filter(alldata_nums, alldata_nums[, i] >= alldata_quantiles[j-1,i] &
+                            alldata_nums[, i] < alldata_quantiles[j,i]))
+     resultsbyvalue <- bind_rows(resultsbyvalue,data.frame(
+                                "predictor" = temppredictor,
+                                "predtype" = temppredtype,
+                                "value" = as.character(tempvalue),
+                                "n" = as.numeric(tempn),
+                                "positivepercent" = as.numeric(temppp),
+                                stringsAsFactors = FALSE))
+  }
+}
+
+resultsbyvalue <- resultsbyvalue %>%
+  mutate(meanpospercent = rep(sum(alldata$result=="Good Hire") / nrow(alldata),nrow(resultsbyvalue)),
+    impact = n * abs((positivepercent - meanpospercent)),
+    result = factor(
+      case_when(
+       positivepercent - meanpospercent > 0 ~ "Favorable", 
+       positivepercent - meanpospercent < 0 ~ "Unfavorable",
+       TRUE ~ "Equal"),
+      levels = c("Favorable", "Unfavorable", "Equal"))) %>%
+  filter(n > 0)  %>%
+  arrange(desc(impact))
+
+resultsbyvalue15 <- resultsbyvalue %>%
+  top_n(15,impact)
+
+
+```
+
+## Descriptive Results - Predictor Detail
+```{r fig.width=10, warning=FALSE}
+
+resultsbyvalue %>%
+  filter(predictor %in% c("priorwelding", "shiftpref", "multijobs")) %>%
+  mutate(value = str_replace(value, paste0(predictor, "..."), "")) %>%
+  mutate(value = str_sub(value, 1, 12)) %>%
+ggplot(aes(reorder(value, n), n, fill = result)) +
+  geom_col() +
+  scale_fill_manual(values = c("light blue")) +
+  facet_wrap(~predictor, scales = "free_y") +
+  geom_text(aes(x = value, y = n, label = paste0(round(positivepercent * 100,0), "%")), nudge_y = 25, size = 3) +
+  labs(title = "Predictor List 1",
+#         subtitle = paste0("Based on Training Data, n = ", nrow(train)),
+     fill = "Result vs Avg",
+     y = "Good Hire Count and %",
+     x = NULL) +
+     theme(axis.text = element_text(size = 10)) +
+  coord_flip()
+
+
+```
+
+<span style="color:black"><font size="2">Using descriptive analytics to look at the first three predictors we see no clear signal.  The "Good Hire" rate is the same regardless of the answer to each individual question.</font></span>
+
+
+## Descriptive Results - Predictor Detail
+```{r fig.width=10, warning=FALSE}
+resultsbyvalue %>%
+  filter(predictor %in% c("techschool", "contract", "licensed")) %>%
+  mutate(value = str_replace(value, paste0(predictor, "..."), "")) %>%
+ggplot(aes(reorder(value, n), n, fill = result)) +
+  geom_col() +
+  scale_fill_manual(values = c("light blue")) +
+  facet_wrap(~predictor, scales = "free_y") +
+  geom_text(aes(x = value, y = n, label = paste0(round(positivepercent * 100,0), "%")), nudge_y = 25, size = 3) +
+  labs(title = "Predictor List 2",
+ #        subtitle = paste0("Based on Training Data, n = ", nrow(train)),
+     fill = "Result vs Avg",
+     y = "Good Hire Count and %",
+     x = NULL) +
+     theme(axis.text = element_text(size = 10)) +
+  coord_flip()
+
+```
+
+<span style="color:black"><font size="2">Using descriptive analytics to look at the second three features, again the results are identical regardless of an individual predictor's response</font></span>
+
+## Descriptive Results - Predictor Detail
+```{r fig.width=10, warning=FALSE}
+resultsbyvalue %>%
+  filter(predictor %in% c("intrating")) %>%
+  mutate(value = str_replace(value, paste0(predictor, "..."), "")) %>%
+ggplot(aes(reorder(value, n), n, fill = result)) +
+  geom_col() +
+  scale_fill_manual(values = c("light green", "dark grey")) +
+  facet_wrap(~predictor, scales = "free_y") +
+  geom_label(aes(x = value, y = n, label = paste0(round(positivepercent * 100,0), "%")), 
+             size = 3, fill = "white") +
+  labs(title = "Predictor List 3",
+#         subtitle = paste0("Based on Training Data, n = ", nrow(train)),
+     fill = "Result vs Avg",
+     y = "Good Hire Count and %",
+     x = NULL) +
+     theme(axis.text = element_text(size = 10)) +
+  coord_flip()
+
+```
+
+<span style="color:black"><font size="2">Because the interviewer score is a numeric score, we will look at it by simple quartiles.  Finally there is some differentiation but no reliable predictive value on employee success.</font></span>
+
+## Predictor Importance
+```{r fig.width=10}
+resultsbyvalue15 %>%
+  ggplot(aes(reorder(value, impact), impact, fill = result)) +
+    geom_col(show.legend = TRUE, size = 8) +
+    scale_fill_manual(values = c("light green", "dark grey", "light blue")) +
+    geom_label(aes(reorder(value, impact), impact, 
+                  label = paste0(round(positivepercent * 100,0), "%")), 
+            fill = "white", size = 4) +
+    labs(title = "Top 15 Predictor Values",
+         fill = "Result vs Avg",
+         y = "Number Employees vs Mean",
+         x = NULL) +
+    theme(axis.text.y = element_text(size = 12)) +
+    coord_flip()
+```
+
+<span style="color:black"><font size="2">In the final use of descriptive analytics we've plotted the individual answers with color coding indicating if the "Good Hire" rate for that answer is favorable to the overall 50% rate.  Only the interviewer score deviates more than 2% from the 50% "Good Hire" average but the Q4 scores show a contradictory relationship</font></span>
+
+## Next Steps
+
+If we only had these descriptive analytics at our disposal we might stop here and decide that there was no predictive value in the hiring data based on looking at the predictors individually.
+
+What about looking to see if there is any signal in the combination of the answers versus just individual answers?  This would be difficult with just descriptive methods as there are 6400 possible combinations of answers; that would be a lot of charts.
+
+Fortunately we have machine learning methods at our disposal.
+
+
+## Training and Testing a Model
+```{r fig.width=10}
+summaryvisdata %>%
+  ggplot(aes(setname, n, fill = result)) +
+  geom_col() +
+  scale_fill_manual(values = c("light green", "dark grey")) +
+  geom_text(data = filter(summaryvisdata, result == "Good Hire"),
+            aes(setname, y = setn, label = paste0(positivepercent * 100, "%")), 
+            nudge_y = -50, size = 4) +
+  geom_label(data = filter(summaryvisdata, result == "Good Hire"),
+            aes(setname, y = setn, label = setn), fill = "white", 
+            nudge_y = 40, size = 4) +
+  coord_flip() +
+  labs(title = "Hiring Model - Data Sets and Actual Results",
+       fill = "Result",
+       subtitle = "70/30 Train / Test split with equal Good / Bad hires", 
+       x = "Data Set", 
+       y = "Employee Count")
+
+
+```
+
+<span style="color:black"><font size="2">First, we use random sampling to evenly split our data into training and test data sets.  The training data will be used to build a model to predict the test data.  If we get good results on the test data we know we have a viable model to predict future applicants</font></span>
+
+
+## Model Results
+```{r fig.width=10}
+truth_matrix <- detail_matrix %>%
+  filter(Model == "RF") %>%
+  group_by(Truth, Pred) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  ungroup() %>%
+  group_by(Truth) %>%
+  mutate(Truthn = sum(n),
+         TruthPERCENT = round(n / Truthn * 100, 0),
+         PredType = case_when(
+           Pred == "Good Hire" & Truth == Pred ~ "True Positive",
+           Pred == "Bad Hire" & Truth == Pred ~ "True Negative",
+           Pred == "Good Hire" & Truth != Pred ~ "False Positive",
+           TRUE ~ "False Negative"
+         )) %>%
+  ungroup()
+
+truth_matrix %>%
+  ggplot(aes(Truth, Pred)) +
+  geom_tile(aes(fill = PredType)) +
+  geom_label(aes(label = percent(TruthPERCENT, scale = 1, accuracy = 1)), size = 4) +
+  geom_label(aes(x = 1.5, y = 2.5, label = paste0("Overall Accuracy : ", 
+                         percent(sum(filter(truth_matrix, 
+                                            Truth == Pred)$n) / sum(n)))), 
+             size = 5) +
+  scale_fill_manual(values = c("Dark Grey", "Black", "Dark Green", " Light Green")) +
+  labs(title = "Class Accuracy",
+       subtitle = paste0("Model Predictions against Test data, n = ", 
+                         nrow(test)),
+   y = "Predicted",
+   x = "Truth",
+   fill = "Hires")
+```
+
+<span style="color:black"><font size="2">After building a basic machine learning model (Random Forest) we can find the hidden signal that exists from the combination of applicant answers.  There is a pattern that the model picked up that allows it to predict success with nearly 90% accuracy.</font></span>
+
+## Model Results
+```{r fig.width=10}
+threshold <- 0.5
+
+chart_data <- filter(detail_matrix, Model == "RF", Score != is.na(Score)) %>%
+  mutate(ScoreBIN = round(Score * 200, -1)/200) %>%
+  group_by(Truth, ScoreBIN) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  group_by(ScoreBIN) %>%
+  mutate(BINTotal = sum(n)) %>%
+  ungroup %>%
+  mutate(BINPercent = round(n / BINTotal, 2))
+
+oversixty <-  sum(filter(chart_data, ScoreBIN >= threshold & Truth == "Good Hire")$n)  / sum(filter(chart_data, ScoreBIN >= threshold)$n)
+undersixty <- sum(filter(chart_data, ScoreBIN < threshold & Truth == "Good Hire")$n)  / sum(filter(chart_data, ScoreBIN < threshold)$n)
+sixty <- paste0("Applicants scores of ",threshold, " or more are ",
+                   round(oversixty * 100, 0), "% Good Hires while lower scores are ", round(undersixty * 100, 0), "% Good Hires")
+  
+
+chart_data %>%
+  ggplot(aes(ScoreBIN, n, fill = Truth)) +
+  geom_col() +
+  scale_fill_manual(values = c("light green", "dark grey")) +
+  geom_text(data = filter(chart_data, Truth == "Good Hire"), 
+            aes(x = ScoreBIN, y = BINTotal, label = paste0(BINPercent * 100, "%")), 
+            nudge_y = 10, size = 4, angle = 90) +
+#  theme_void() +
+  labs(title = "Predicted Score vs Truth",
+       subtitle = paste0("Model Predictions against Test data, n = ", nrow(test)), 
+       x = "Model Score", 
+       y = "Employee Count",
+       caption = sixty)
+
+
+```
+
+<span style="color:black"><font size="2">The score from the model would be used to rank the applicants.  This chart shows how the results relate to the model score</font></span>
+
+
+## Conclusions
+
+Machine learning can unlock hidden signals in your data that human eyes and intuition can't always find.
+
+Use it to leverage the full power of your organization's data to solve business problems
+```{r , echo = FALSE, warning=FALSE}
+# RUN ALL BLOCK
+
+```
+
