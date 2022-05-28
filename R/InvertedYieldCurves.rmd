@@ -1,0 +1,181 @@
+---
+title: "Inverted Yield Curves in Motion"
+author: "by : Chris at Savvy Analytics"
+output:
+  html_document:
+    df_print: paged
+    code_folding: hide   
+---
+<span style="color:blue"><font size="3">Background : </font></span>
+Inverted yield curves have been touted as the harbinger of recession.
+
+<span style="color:blue"><font size="3">Goal : </font></span>
+This document is just going to visualize a few historical inverted yield curves and animate them so that we can visually see how the yield curve changes in the time period around its' inversion.  This analysis will strictly focus on US treasury yield rates.
+
+Note : This article, like most of mine on R-Pubs, is both instructional and investigative.  You can re-create any of these charts and tables from the embedded R code.  Click the "Code" button to view. 
+```{r warning=FALSE, message=FALSE}
+
+# Clear Environment and load libraries
+# Optional memory clear
+rm(list=ls())
+# Disable Scientific Notation in printing
+options(scipen=999)
+# Load libraries
+require(tidyverse)
+require(quantmod)
+require(lubridate)
+require(scales)
+require(rvest)
+require(kableExtra)
+require(gganimate)
+
+# Load data using the QuantMod package to retrive historical data
+# Minimum Wage and CPI data are provided by the St. Louis Federal Reserve "FRED" system
+
+# Grab the Federal Minimum Wage From FRED
+invisible(
+  getSymbols(c("DGS3MO", "DGS1", "DGS2", "DGS5", "DGS7",
+             "DGS10", "DGS20", "DGS30"), src = "FRED")
+)
+
+DFFromSymbol <- function(Symbol, Unit) {
+  data.frame(Symbol) %>%
+  mutate(Symbol = colnames(.)[1],
+         Maturity = ifelse(str_detect(Symbol, "MO"),
+                      as.numeric(str_extract(Symbol, "\\d*(?=MO)")),
+                      as.numeric(str_extract(Symbol, "\\d*$")) * 12),
+         QuoteDate = as.Date(row.names(.), "%Y-%m-%d"),
+         TimeUnit = floor_date(QuoteDate, unit = Unit)) %>%
+  rename(Value = 1) %>%
+  group_by(Maturity, TimeUnit) %>%
+  summarise(Value = mean(Value, na.rm = TRUE))
+}
+
+PresentationWeekDF <- bind_rows(
+  DFFromSymbol(DGS3MO, "week"),
+  DFFromSymbol(DGS1, "week"), DFFromSymbol(DGS2, "week"), 
+  DFFromSymbol(DGS5, "week"), DFFromSymbol(DGS7, "week"), 
+  DFFromSymbol(DGS10, "week")) 
+
+PresentationWeekDFLimits <- PresentationWeekDF %>%
+  group_by(Maturity) %>%
+  summarise(MaxDate = max(TimeUnit), 
+            MinDate = min(TimeUnit)) %>%
+  mutate(LowerLimit = max(MinDate),
+         UpperLimit = min(MaxDate))  
+
+PresentationWeekDF <- PresentationWeekDF %>%
+  filter(TimeUnit >= PresentationWeekDFLimits$LowerLimit[1] &
+         TimeUnit <= PresentationWeekDFLimits$UpperLimit[1])
+
+
+Inversion <- PresentationWeekDF %>%
+  spread(Maturity, Value) %>%
+  mutate(InversionStatus = case_when(
+    `24` > `120` | `24` > `60` ~ "Inverted",
+    TRUE ~ "Normal")) %>%
+  dplyr::select(TimeUnit, InversionStatus)
+
+PresentationWeekDF <- PresentationWeekDF %>%
+  left_join(Inversion, by = c("TimeUnit"))
+
+```
+
+What is an inverted yield curve?  Generally it is when short term rates are higher than long term rates.  One of the more popular definitions of an inversion is when the two year rate exceeds the ten year rate.  In fact the Federal Reserve tracks that spread here:
+
+https://fred.stlouisfed.org/series/T10Y2Y
+
+so for this analysis we will utilize that definition of inverted.  
+
+To start with we will look at the three most recent historical inversions prior to 2019.
+
+The inversion just prior to the 2008 financial crisis:
+```{r fig.width=10}
+Plot2007 <- PresentationWeekDF %>%
+  filter(TimeUnit >= as.Date("2006-04-01") &
+         TimeUnit <= as.Date("2007-09-02")) %>%
+  ggplot(aes(Maturity, Value)) +
+  geom_smooth(aes(color = InversionStatus), method = "loess", formula = "y ~ x", se=FALSE, size = 2) +
+  geom_point(size = 4, color = "black") +
+  scale_color_manual(values = c("red", "pink")) +
+  theme_classic() +
+  labs(title = "US Treasury Yield Curve - 2006 to 2007",
+       color = "Yield Curve State",
+       x = "Months to Maturity",
+       y = "Yield")
+  
+Plot2007 + transition_time(TimeUnit) +
+  labs(subtitle = "Week of : {frame_time}")
+
+```
+
+The inversion that burst the Dot Com bubble in 2000:
+```{r fig.width=10}
+Plot2000 <- PresentationWeekDF %>%
+  filter(TimeUnit >= as.Date("1999-12-19") &
+         TimeUnit <= as.Date("2000-04-01")) %>%
+  ggplot(aes(Maturity, Value)) +
+  geom_smooth(aes(color = InversionStatus), method = "loess", formula = "y ~ x", se=FALSE, size = 2) +
+  geom_point(size = 4, color = "black") +
+  scale_color_manual(values = c("red", "pink")) +
+  theme_classic() +
+  labs(title = "US Treasury Yield Curve - 1999 to 2000",
+       color = "Yield Curve State",
+       x = "Months to Maturity",
+       y = "Yield")
+  
+
+Plot2000 + transition_time(TimeUnit) +
+  labs(subtitle = "Week of : {frame_time}")
+
+```
+
+Finally the inversion of 1988:
+```{r fig.width=10}
+Plot2000 <- PresentationWeekDF %>%
+  filter(TimeUnit >= as.Date("1988-10-30") &
+         TimeUnit <= as.Date("1990-03-04")) %>%
+  ggplot(aes(Maturity, Value)) +
+  geom_smooth(aes(color = InversionStatus), method = "loess", formula = "y ~ x", se=FALSE, size = 2) +
+  geom_point(size = 4, color = "black") +
+  scale_color_manual(values = c("red", "pink")) +
+  theme_classic() +
+  labs(title = "US Treasury Yield Curve - 1988 to 1990",
+       color = "Yield Curve State",
+       x = "Months to Maturity",
+       y = "Yield")
+  
+
+Plot2000 + transition_time(TimeUnit) +
+  labs(subtitle = "Week of : {frame_time}")
+
+```
+
+In all of these examples you can see how the inversion happens and then I show the 13 week following where you can often see the Federal Reserve begin to cut rates in an attempt to stimulate the economy at the outset of the recession.
+
+Finally here is the "blinking signal" where the curve inverted and flipped back in late 2019.  Finally you can see the rates crash lower and the curve return to normal as the Federal Reserve took action to stimulate the Covid crippled economy in Q1 2020:
+```{r fig.width=10}
+CYPlot <- PresentationWeekDF %>%
+  filter(TimeUnit >= as.Date("2019-07-01") &
+         TimeUnit <= as.Date("2020-06-01")) %>%
+  ggplot(aes(Maturity, Value)) +
+  geom_smooth(aes(color = InversionStatus), method = "loess", formula = "y ~ x", se=FALSE, size = 2) +
+  geom_point(size = 4, color = "black") +
+  scale_color_manual(values = c("red", "pink")) +
+  theme_classic() +
+  labs(title = "US Treasury Yield Curve - 2020 YTD",
+       color = "Yield Curve State",
+       x = "Months to Maturity",
+       y = "Yield")
+  
+
+CYPlot + transition_time(TimeUnit) +
+  labs(subtitle = "Week of : {frame_time}")
+
+```
+
+I'm not going to draw any conclusions but I hope you enjoy the dancing yield curves.
+
+Stay savvy
+
+
