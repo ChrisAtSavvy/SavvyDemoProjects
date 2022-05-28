@@ -5,6 +5,7 @@ author: "by : Chris at Savvy Analytics"
 output:
   html_document:
     df_print: paged
+    code_folding: hide        
 ---
 
 
@@ -39,7 +40,8 @@ rawfile <- "https://www.census.gov/construction/nrc/pdf/newresconst.pdf"
 
 Here is a snapshot of some of the data tables in the PDF that we will be extracting.
 
-![](c:/Users/Chris.Woolery/OneDrive/codebanklocal/democode/PDFDemo.png)
+![](https://github.com/ChrisAtSavvy/SavvyDemoProjects/blob/main/R/PDFDemo.png?raw=true)
+
 
 It would be great if a R package could magically interpret all of the ways that data is reported and automatically break it down into usable data frames but that currently doesn't exist.
 
@@ -60,7 +62,7 @@ rawlines <- pdf_text(rawfile) %>%
 Here is a snapshot from the new rawlines data frame showing five rows of one of the data sections of the PDF in extracted text format.
 
 ```{r echo=FALSE}
-rawlines[87:92,] %>%
+rawlines[110:122,] %>%
   kable() %>%
   kable_styling("striped") %>%
   row_spec(0, color = "white", background = "black")
@@ -153,40 +155,40 @@ AllTables <- wiplines %>%
          # use the fixcomma function we created above to convert it to a number
          # we were able to extract all data by position from the start of the line
          USTot = ifelse(!is.na(Period),
-                       fixcomma(str_extract(rawline, "(?<=^.{65}).{6}")),
+                       fixcomma(str_extract(rawline, "(?<=^.{69}).{6}")),
                        NA),
          US1u = ifelse(!is.na(Period),
-                       fixcomma(str_extract(rawline, "(?<=^.{75}).{6}")),
+                       fixcomma(str_extract(rawline, "(?<=^.{79}).{6}")),
                        NA),
          US2_4u = ifelse(!is.na(Period),
-                       fixcomma(str_extract(rawline, "(?<=^.{85}).{6}")),
+                       fixcomma(str_extract(rawline, "(?<=^.{89}).{6}")),
                        NA),
          US5u = ifelse(!is.na(Period),
-                       fixcomma(str_extract(rawline, "(?<=^.{94}).{6}")),
+                       fixcomma(str_extract(rawline, "(?<=^.{98}).{6}")),
                        NA),
          NWTot = ifelse(!is.na(Period),
-                       fixcomma(str_extract(rawline, "(?<=^.{101}).{6}")),
+                       fixcomma(str_extract(rawline, "(?<=^.{105}).{6}")),
                        NA),
          NW1u = ifelse(!is.na(Period),
-                       fixcomma(str_extract(rawline, "(?<=^.{112}).{6}")),
+                       fixcomma(str_extract(rawline, "(?<=^.{116}).{6}")),
                        NA),
          MWTot = ifelse(!is.na(Period),
-                       fixcomma(str_extract(rawline, "(?<=^.{121}).{6}")),
+                       fixcomma(str_extract(rawline, "(?<=^.{125}).{6}")),
                        NA),
          MW1u = ifelse(!is.na(Period),
-                       fixcomma(str_extract(rawline, "(?<=^.{130}).{6}")),
+                       fixcomma(str_extract(rawline, "(?<=^.{134}).{6}")),
                        NA),
          STot = ifelse(!is.na(Period),
-                       fixcomma(str_extract(rawline, "(?<=^.{139}).{6}")),
+                       fixcomma(str_extract(rawline, "(?<=^.{143}).{6}")),
                        NA),
          S1u = ifelse(!is.na(Period),
-                       fixcomma(str_extract(rawline, "(?<=^.{150}).{6}")),
+                       fixcomma(str_extract(rawline, "(?<=^.{154}).{6}")),
                        NA),
          WTot = ifelse(!is.na(Period),
-                       fixcomma(str_extract(rawline, "(?<=^.{159}).{6}")),
+                       fixcomma(str_extract(rawline, "(?<=^.{163}).{6}")),
                        NA),
          W1u = ifelse(!is.na(Period),
-                       fixcomma(str_extract(rawline, "(?<=^.{170}).{6}")),
+                       fixcomma(str_extract(rawline, "(?<=^.{174}).{6}")),
                        NA),
          # We need to determine which rows are the detail as we will use the 
          # fill function to copy all section, header and footer data down or
@@ -200,12 +202,13 @@ AllTables <- wiplines %>%
   # detail month and eliminate fields we do not need
   mutate(MonthBeg = as.Date(paste0(Period, " 01 ", Year), format="%B %d %Y")) %>%
   dplyr::select(-rawline, -IsDetail, -Period, -Year) %>%
-  dplyr::select(SectionID, MonthBeg, everything())
+  dplyr::select(SectionID, MonthBeg, everything()) %>%
+  filter(!is.na(SectionID))
 
 
 ```
 
-Now we have a nice tidy 129 row data frame of our data; here a few of the rows.
+Now we have a nice tidy 100+ row data frame of our data; here a few of the rows.
 
 ```{r echo=FALSE, fig.width=10}
 AllTables[1:8,] %>%
