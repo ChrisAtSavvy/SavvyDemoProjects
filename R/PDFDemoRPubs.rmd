@@ -9,7 +9,7 @@ output:
 ---
 
 <span style="color:blue"><font size="3">Background : </font></span>
-There is often useful data that is only available via a text or PDF report.  This can be publicly available data on the internet or data from legacy systems that produce printable reports but do not allow access to the underlying data. 
+There is often useful data that is only available via a text or PDF report.  This can be publicly available data on the internet or data from legacy systems that produce printable reports but do not allow access to the underlying data.
 
 <span style="color:blue"><font size="3">Goal : </font></span>
 Rather than retype this data, let's build a pipeline to get the data into a usable format that can be used for further analysis.  
