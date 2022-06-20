@@ -1,3 +1,1 @@
 # SavvyDemoProjects
-
-Demonstration Projects
