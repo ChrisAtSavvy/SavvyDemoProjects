@@ -39,14 +39,7 @@ QuietLoad('tidyverse')
 QuietLoad('quantmod')
 QuietLoad('lubridate')
 QuietLoad('scales')
-
-RunMode = "Windows"
-
-if (RunMode == "Linux") {
-  ArchiveFile = "/home/woolyadmin/R/SP500Strategy_PT1010.RData"
-} else {
-  ArchiveFile = "C:\\Users\\Chris.Woolery\\OneDrive\\woolylvm01\\SP500Strategy_PT1010.RData"
-}
+ 
  
 ```
 
@@ -55,6 +48,7 @@ if (RunMode == "Linux") {
 # This is my standard load package to load up a dataframe with:
 # S&P 500, treasury rates and common sector ETF's for analytics of various strategies
 
+ArchiveFile = "/home/woolyadmin/R/SP500Strategy_PT1010.RData"
 
 Offline = FALSE
 
@@ -162,7 +156,7 @@ PeaksvsTroughDF = function(ModelName, PeakTarget, TroughTarget) {
   SP500Wip = AllSymbolsDF %>%
     pivot_wider(id_cols = WeekBeg, names_from = SymbolName, values_from = CloseValue) %>%
     mutate(ModelName = ModelName) %>%
-    dplyr::select(ModelName, WeekBeg, SP500, FedFunds) %>%
+    dplyr::select(ModelName, WeekBeg, SP500) %>%
     mutate(SP500MA10 = rollmean(SP500, 10, fill = NA, align = c("right")),
            HighValue = as.numeric(NA),
            HighDate = as.Date(NA),
@@ -264,7 +258,7 @@ AllModelsDF = AllModelsDF %>%
 # This custom function will plot out peaks, troughs and variances from the SP500 dataframe
 # given a date range
 PeakPlot = function(EndingDate, PlotTitle) {
-  
+
   DisplayDF = AllModelsDF %>%
     filter(WeekBeg <= EndingDate & ModelName == "BuyAndHold")
   
@@ -281,22 +275,21 @@ PeakPlot = function(EndingDate, PlotTitle) {
   PeakvsTroughLabel = paste0(percent((LowValue / HighValue) -1, accuracy = 2), " Peak vs Trough")
   
   DisplayDF = DisplayDF %>%
-    filter(WeekBeg >= StartDate) 
+    filter(WeekBeg >= StartDate)
   
   # About 30 positions are displayable
   BreakWeeks = paste0(max(1, round(nrow(DisplayDF) / 30, 1)), " weeks")
   
+  #print(paste0("Low : ", LowValue, " High : ", HighValue, " Mean : ", mean(LowValue, HighValue)))
+  
   Plot1 = DisplayDF %>%
-    mutate(FedFundsDisplay = rescale(FedFunds, to = c(min(DisplayDF$SP500), max(DisplayDF$SP500)))) %>%
     ggplot(aes(WeekBeg, SP500)) +
       geom_line(aes(color = "Weekly Closing Value"), size = 2) +
-      geom_line(aes(WeekBeg, FedFundsDisplay, color = "Fed Funds Rate (not to scale)"), size = 1.2) +
       geom_point(aes(WeekBeg, HighValue, color = "Peak to Date"), size = 2) +
       geom_point(aes(WeekBeg, LowValue, color = "Trough Since Last Peak"), size = 2) +
       scale_color_manual(name = "", values = c("Weekly Closing Value" = "black",
                                                "Peak to Date" = "green",
-                                               "Trough Since Last Peak" = "red",
-                                               "Fed Funds Rate (not to scale)" = "blue")) +
+                                               "Trough Since Last Peak" = "red")) +
       scale_x_date(breaks = BreakWeeks) +
       scale_y_continuous(labels = comma_format(accuracy = 1)) +
       theme_minimal() +
