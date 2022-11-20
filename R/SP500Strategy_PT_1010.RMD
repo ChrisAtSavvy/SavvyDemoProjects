@@ -48,7 +48,7 @@ QuietLoad('scales')
 # This is my standard load package to load up a dataframe with:
 # S&P 500, treasury rates and common sector ETF's for analytics of various strategies
 
-ArchiveFile = "/home/woolyadmin/R/SP500Strategy_PT1010.RData"
+ArchiveFile = "/home/woolylinux01/Documents/SavvyDemoProjects/R/SP500Strategy_PT1010.RData"
 
 Offline = FALSE
 
@@ -284,7 +284,7 @@ PeakPlot = function(EndingDate, PlotTitle) {
   
   Plot1 = DisplayDF %>%
     ggplot(aes(WeekBeg, SP500)) +
-      geom_line(aes(color = "Weekly Closing Value"), size = 2) +
+      geom_line(aes(color = "Weekly Closing Value"), linewidth =2) +
       geom_point(aes(WeekBeg, HighValue, color = "Peak to Date"), size = 2) +
       geom_point(aes(WeekBeg, LowValue, color = "Trough Since Last Peak"), size = 2) +
       scale_color_manual(name = "", values = c("Weekly Closing Value" = "black",
@@ -302,7 +302,7 @@ PeakPlot = function(EndingDate, PlotTitle) {
   
   Plot1 +
     # Peak Line and Label
-    annotate("segment", size = 1,
+    annotate("segment", linewidth =1,
              x = HighDate, xend = EndingDate,
              y = HighValue, yend = HighValue,
              arrow = arrow(ends = "both", angle = 90, length = unit(.2,"cm"))) +
@@ -311,7 +311,7 @@ PeakPlot = function(EndingDate, PlotTitle) {
              x = HighDate + difftime(EndingDate, HighDate) / 2,
              y = HighValue) +
     # Peak to Trough Line and Label
-    annotate("segment", size = 1,
+    annotate("segment", linewidth =1,
              x = HighDate, xend = LowDate,
              y = mean(c(LowValue, HighValue)), yend = mean(c(LowValue, HighValue)),
              arrow = arrow(ends = "both", angle = 90, length = unit(.2,"cm"))) +
@@ -320,7 +320,7 @@ PeakPlot = function(EndingDate, PlotTitle) {
              x = HighDate + difftime(LowDate, HighDate) / 2,
              y = mean(c(LowValue, HighValue))) +     
     # Trough Line and Label
-    annotate("segment", size = 1,
+    annotate("segment", linewidth =1,
              x = LowDate, xend = EndingDate,
              y = LowValue, yend = LowValue,
              arrow = arrow(ends = "both", angle = 90, length = unit(.2,"cm"))) +

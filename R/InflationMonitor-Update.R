@@ -20,9 +20,9 @@ library(rmarkdown)
 library(knitr)
 library(rsconnect)
 
-Sys.setenv(RSTUDIO_PANDOC="/usr/lib/rstudio/bin/pandoc")
+#Sys.setenv(RSTUDIO_PANDOC="/usr/lib/rstudio/bin/pandoc")
 
-rmarkdown::render("/home/woolyadmin/R/InflationMonitor.RMD")
+rmarkdown::render("/home/woolylinux01/Documents/SavvyDemoProjects/R/InflationMonitor.RMD")
 
 # Initial Publishing
 # A continuously updated look at inflation as measured by CPI and PPI over various time periods
@@ -46,7 +46,7 @@ RepublishID <- "https://api.rpubs.com/api/v1/document/801168/0f747d7194d84d929e1
 # With R 4.X it appears we have to re-call rsconnect and be explicit with the upload params
 library(rsconnect)
 rpubsUpload(title = "Inflation Monitor", 
-            contentFile = "/home/woolyadmin/R/InflationMonitor.html", 
-            originalDoc = "/home/woolyadmin/R/InflationMonitor.RMD",
+            contentFile = "/home/woolylinux01/Documents/SavvyDemoProjects/R/InflationMonitor.html", 
+            originalDoc = "/home/woolylinux01/Documents/SavvyDemoProjects/R/InflationMonitor.RMD",
             id = RepublishID)
 

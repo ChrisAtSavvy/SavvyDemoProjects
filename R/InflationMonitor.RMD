@@ -113,7 +113,7 @@ Plot1 = PresentationDF %>%
   filter(QuoteDate >= StartDate) %>%
   filter(MetricName == PresentationMetric) %>%
   ggplot(aes(QuoteDate, MetricValue)) +
-   geom_line(size = 2, color = LineColor, na.rm = TRUE) +
+   geom_line(linewidth = 2, color = LineColor, na.rm = TRUE) +
    theme_classic() +
    theme(text=element_text(size=16),
          plot.caption=element_text(size=12),
@@ -129,7 +129,7 @@ Plot1 = PresentationDF %>%
 
 Plot1 +
   # 12 Month Lines and Label
-  annotate("segment", size = 1,
+  annotate("segment", linewidth = 1,
            x = PriorYear, xend = CurrentMonth , 
            y = EndingMetricValue, 
            yend = EndingMetricValue,
@@ -142,7 +142,7 @@ Plot1 +
            x = mean(c(CurrentMonth, PriorYear)), 
            y = EndingMetricValue) +
   # 24 Month Lines and Label
-  annotate("segment", size = 1,
+  annotate("segment", linewidth = 1,
            x = PriorYear2, xend = CurrentMonth , 
            y = LineAdjPriorYear2, 
            yend = LineAdjPriorYear2,
@@ -155,7 +155,7 @@ Plot1 +
            x = mean(c(CurrentMonth, PriorYear2)), 
            y = LineAdjPriorYear2) +
   # 36 Month Lines and Label
-  annotate("segment", size = 1,
+  annotate("segment", linewidth = 1,
            x = PriorYear3, xend = CurrentMonth , 
            y = LineAdjPriorYear3, 
            yend = LineAdjPriorYear3,
@@ -222,7 +222,7 @@ Demonstration <- dbConnect(
                         dataset = "demonstration",
                         billing = "savvy-analytics-42")
 
-bq_auth(path = "BQSavvyDemonstration.json")
+bq_auth(path = "/home/woolylinux01/Documents/BQSavvyDemonstration.json")
 
 econ_Compare <- dbGetQuery(Demonstration, "SELECT * FROM econ_SRCKeyMeasures")
 ColNames.econ_Compare <- colnames(econ_Compare)
