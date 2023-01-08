@@ -48,7 +48,11 @@ QuietLoad('scales')
 # This is my standard load package to load up a dataframe with:
 # S&P 500, treasury rates and common sector ETF's for analytics of various strategies
 
-ArchiveFile = "/home/woolylinux01/Documents/SavvyDemoProjects/R/SP500Strategy_PT1010.RData"
+if (str_detect(.Platform$OS.type, "win")) {
+  ArchiveFile = "C:\\Users\\Chris.Woolery\\OneDrive - Republic Airways\\Documents\\RepoArchive\\SavvyDemoProjects\\R\\SP500Strategy_PT1010.RData"
+} else {
+  ArchiveFile = "/home/woolylinux01/Documents/SavvyDemoProjects/R/SP500Strategy_PT1010.RData"
+}
 
 Offline = FALSE
 
@@ -257,6 +261,8 @@ AllModelsDF = AllModelsDF %>%
 
 # This custom function will plot out peaks, troughs and variances from the SP500 dataframe
 # given a date range
+#EndingDate = Sys.Date()
+#PlotTitle = "Current"
 PeakPlot = function(EndingDate, PlotTitle) {
 
   DisplayDF = AllModelsDF %>%
@@ -277,6 +283,15 @@ PeakPlot = function(EndingDate, PlotTitle) {
   DisplayDF = DisplayDF %>%
     filter(WeekBeg >= StartDate)
   
+  DisplayDF = DisplayDF %>%
+    left_join(AllSymbolsDF %>%
+                filter(SymbolName == "FedFunds") %>%
+                rename(FedFunds = CloseValue) %>%
+                select(WeekBeg, FedFunds),
+              by = c("WeekBeg")) 
+  DisplayDF = DisplayDF %>%
+    mutate(FedFundsAlt = rescale(FedFunds, c(min(SP500), max(SP500))))
+  
   # About 30 positions are displayable
   BreakWeeks = paste0(max(1, round(nrow(DisplayDF) / 30, 1)), " weeks")
   
@@ -284,10 +299,12 @@ PeakPlot = function(EndingDate, PlotTitle) {
   
   Plot1 = DisplayDF %>%
     ggplot(aes(WeekBeg, SP500)) +
-      geom_line(aes(color = "Weekly Closing Value"), linewidth =2) +
+      geom_line(aes(color = "Weekly Closing Value"), size = 2) +
+      geom_line(aes(WeekBeg, FedFundsAlt, color = "Fed Funds Rate (Not to scale)"), size = 1) +
       geom_point(aes(WeekBeg, HighValue, color = "Peak to Date"), size = 2) +
       geom_point(aes(WeekBeg, LowValue, color = "Trough Since Last Peak"), size = 2) +
       scale_color_manual(name = "", values = c("Weekly Closing Value" = "black",
+                                               "Fed Funds Rate (Not to scale)" = "dark blue",
                                                "Peak to Date" = "green",
                                                "Trough Since Last Peak" = "red")) +
       scale_x_date(breaks = BreakWeeks) +
@@ -299,10 +316,10 @@ PeakPlot = function(EndingDate, PlotTitle) {
            subtitle = paste0("By Week Through : ", floor_date(EndingDate, unit = "week")),
            caption = "Peaks = All Time Highs, Troughs are Lowest Points after a Peak",
            x = "", y = "S&P 500 Index Value")
-  
+
   Plot1 +
     # Peak Line and Label
-    annotate("segment", linewidth =1,
+    annotate("segment", size = 1,
              x = HighDate, xend = EndingDate,
              y = HighValue, yend = HighValue,
              arrow = arrow(ends = "both", angle = 90, length = unit(.2,"cm"))) +
@@ -311,7 +328,7 @@ PeakPlot = function(EndingDate, PlotTitle) {
              x = HighDate + difftime(EndingDate, HighDate) / 2,
              y = HighValue) +
     # Peak to Trough Line and Label
-    annotate("segment", linewidth =1,
+    annotate("segment", size = 1,
              x = HighDate, xend = LowDate,
              y = mean(c(LowValue, HighValue)), yend = mean(c(LowValue, HighValue)),
              arrow = arrow(ends = "both", angle = 90, length = unit(.2,"cm"))) +
@@ -320,7 +337,7 @@ PeakPlot = function(EndingDate, PlotTitle) {
              x = HighDate + difftime(LowDate, HighDate) / 2,
              y = mean(c(LowValue, HighValue))) +     
     # Trough Line and Label
-    annotate("segment", linewidth =1,
+    annotate("segment", size = 1,
              x = LowDate, xend = EndingDate,
              y = LowValue, yend = LowValue,
              arrow = arrow(ends = "both", angle = 90, length = unit(.2,"cm"))) +
