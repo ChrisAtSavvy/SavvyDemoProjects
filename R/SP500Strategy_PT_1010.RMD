@@ -295,8 +295,8 @@ PeakPlot = function(EndingDate, PlotTitle) {
   # About 30 positions are displayable
   BreakWeeks = paste0(max(1, round(nrow(DisplayDF) / 30, 1)), " weeks")
   
-  #print(paste0("Low : ", LowValue, " High : ", HighValue, " Mean : ", mean(LowValue, HighValue)))
-  
+if (str_detect(.Platform$OS.type, "win")) {
+  # Windows format uses "size" for lines and segment
   Plot1 = DisplayDF %>%
     ggplot(aes(WeekBeg, SP500)) +
       geom_line(aes(color = "Weekly Closing Value"), size = 2) +
@@ -345,7 +345,59 @@ PeakPlot = function(EndingDate, PlotTitle) {
              label = TroughLabel,
              x = LowDate + difftime(EndingDate, LowDate) / 2,
              y = LowValue) 
+
+} else {
+  # Linux format uses "linewidth" for lines and segment
+  Plot1 = DisplayDF %>%
+    ggplot(aes(WeekBeg, SP500)) +
+      geom_line(aes(color = "Weekly Closing Value"), linewidth = 2) +
+      geom_line(aes(WeekBeg, FedFundsAlt, color = "Fed Funds Rate (Not to scale)"), linewidth = 1) +
+      geom_point(aes(WeekBeg, HighValue, color = "Peak to Date"), size = 2) +
+      geom_point(aes(WeekBeg, LowValue, color = "Trough Since Last Peak"), size = 2) +
+      scale_color_manual(name = "", values = c("Weekly Closing Value" = "black",
+                                               "Fed Funds Rate (Not to scale)" = "dark blue",
+                                               "Peak to Date" = "green",
+                                               "Trough Since Last Peak" = "red")) +
+      scale_x_date(breaks = BreakWeeks) +
+      scale_y_continuous(labels = comma_format(accuracy = 1)) +
+      theme_minimal() +
+      theme(legend.position = "bottom",
+            axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+      labs(title = paste0("SP500 - ", PlotTitle),
+           subtitle = paste0("By Week Through : ", floor_date(EndingDate, unit = "week")),
+           caption = "Peaks = All Time Highs, Troughs are Lowest Points after a Peak",
+           x = "", y = "S&P 500 Index Value")
+
+  Plot1 +
+    # Peak Line and Label
+    annotate("segment", linewidth = 1,
+             x = HighDate, xend = EndingDate,
+             y = HighValue, yend = HighValue,
+             arrow = arrow(ends = "both", angle = 90, length = unit(.2,"cm"))) +
+    annotate("label",
+             label = PeakLabel,
+             x = HighDate + difftime(EndingDate, HighDate) / 2,
+             y = HighValue) +
+    # Peak to Trough Line and Label
+    annotate("segment", linewidth = 1,
+             x = HighDate, xend = LowDate,
+             y = mean(c(LowValue, HighValue)), yend = mean(c(LowValue, HighValue)),
+             arrow = arrow(ends = "both", angle = 90, length = unit(.2,"cm"))) +
+    annotate("label",
+             label = PeakvsTroughLabel,
+             x = HighDate + difftime(LowDate, HighDate) / 2,
+             y = mean(c(LowValue, HighValue))) +     
+    # Trough Line and Label
+    annotate("segment", linewidth = 1,
+             x = LowDate, xend = EndingDate,
+             y = LowValue, yend = LowValue,
+             arrow = arrow(ends = "both", angle = 90, length = unit(.2,"cm"))) +
+    annotate("label",
+             label = TroughLabel,
+             x = LowDate + difftime(EndingDate, LowDate) / 2,
+             y = LowValue) 
   
+} 
 
 }
 ```
