@@ -308,7 +308,7 @@ Plot1 = PresentationDF %>%
   scale_x_date(labels = date_format("%Y-%b"), 
                breaks = DateRange) +
   scale_y_continuous(labels = percent_format(accuracy = 0.1)) +
-  labs(title = paste0("Annualized Changes in ", DisplayMetric),
+  labs(title = paste0("Rolling 3 Month Rate Change in ", DisplayMetric, " Annualized"),
       color = "",
       caption = paste0("Source : St. Louis Federal Reserve - FRED.  As of ", Sys.Date()),
       y = "",
