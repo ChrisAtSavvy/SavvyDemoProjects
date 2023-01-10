@@ -56,7 +56,12 @@ PresentationDF <- data.frame(CPILFENS) %>%
               mutate(QuoteDate = as.Date(row.names(.))),
             by = c("QuoteDate")) %>%
 #  filter(complete.cases(.)) %>%
-  dplyr::select(QuoteDate, CPI, CPICore, PCE, PPI)
+  mutate(CPI3MRunRate = ((CPI / lag(CPI, 3, default = NA)) - 1) * 4 ,
+         CPICore3MRunRate = ((CPICore / lag(CPICore, 3, default = NA)) - 1) * 4,
+         PCE3MRunRate = ((PCE / lag(PCE, 3, default = NA))- 1) * 4, 
+         PPI3MRunRate = ((PPI / lag(PPI, 3, default = NA)) - 1) * 4) %>%
+  dplyr::select(QuoteDate, CPI, CPICore, PCE, PPI, 
+                CPI3MRunRate, CPICore3MRunRate, PCE3MRunRate, PPI3MRunRate)
 
 # Pivot to Long format
 PresentationDF = PresentationDF %>%
@@ -85,11 +90,8 @@ PresentationMetric = MetricName
 CurrentMonth = max(filter(PresentationDF, MetricName == PresentationMetric)$QuoteDate)
 StartDate = CurrentMonth - months(StartLag)
 DateRange = seq.Date(StartDate, CurrentMonth, by = "month")
-#PriorYear = max(PresentationDF$QuoteDate) - months(12)
 PriorYear = CurrentMonth - months(12)
-#PriorYear2 = max(PresentationDF$QuoteDate) - months(24)
 PriorYear2 = CurrentMonth - months(24)
-#PriorYear3 = max(PresentationDF$QuoteDate) - months(36)
 PriorYear3 = CurrentMonth - months(36)
 EndingMetricValue = filter(PresentationDF, MetricName == PresentationMetric, QuoteDate == CurrentMonth)$MetricValue
 PriorYearMetricValue = filter(PresentationDF, MetricName == PresentationMetric, QuoteDate == PriorYear)$MetricValue
@@ -109,6 +111,69 @@ LineAdjPriorYear3 = EndingMetricValue +
 LineAdjPriorYear3 = if_else(LineAdjPriorYear3 < EndingMetricValue + 2, EndingMetricValue + 2,
                             LineAdjPriorYear3)
 
+if (str_detect(.Platform$OS.type, "win")) {
+# Windows uses "size" and linux uses "linewidth"
+Plot1 = PresentationDF %>%
+  filter(QuoteDate >= StartDate) %>%
+  filter(MetricName == PresentationMetric) %>%
+  ggplot(aes(QuoteDate, MetricValue)) +
+   geom_line(size = 2, color = LineColor, na.rm = TRUE) +
+   theme_classic() +
+   theme(text=element_text(size=16),
+         plot.caption=element_text(size=12),
+         axis.text=element_text(size=10),
+         axis.text.x = element_text(angle = 90, vjust = 0.5)) +  
+  scale_x_date(labels = date_format("%Y-%b"), 
+               breaks = DateRange) +
+  labs(title = paste0("Annualized Changes in ", PresentationMetric),
+      color = "",
+      caption = paste0("Source : St. Louis Federal Reserve - FRED.  As of ", Sys.Date()),
+      y = "",
+      x = "")
+
+Plot1 +
+  # 12 Month Lines and Label
+  annotate("segment", size = 1,
+           x = PriorYear, xend = CurrentMonth , 
+           y = EndingMetricValue, 
+           yend = EndingMetricValue,
+           arrow = arrow(ends = "both", angle = 90, length = unit(.2,"cm"))) +
+  annotate("segment", size = 2,
+           x = PriorYear, xend = PriorYear, 
+           y = EndingMetricValue, yend = PriorYearMetricValue) +
+  annotate("label", 
+           label = paste0("12Mo ", percent(MetricValue12MonthChange, accuracy = .1)),
+           x = mean(c(CurrentMonth, PriorYear)), 
+           y = EndingMetricValue) +
+  # 24 Month Lines and Label
+  annotate("segment", size = 1,
+           x = PriorYear2, xend = CurrentMonth , 
+           y = LineAdjPriorYear2, 
+           yend = LineAdjPriorYear2,
+           arrow = arrow(ends = "both", angle = 90, length = unit(.2,"cm"))) +
+  annotate("segment", size = 2,
+           x = PriorYear2, xend = PriorYear2, 
+           y = LineAdjPriorYear2, yend = PriorYear2MetricValue) +
+  annotate("label", 
+           label = paste0("24Mo ", percent(MetricValue24MonthChange, accuracy = .1)),
+           x = mean(c(CurrentMonth, PriorYear2)), 
+           y = LineAdjPriorYear2) +
+  # 36 Month Lines and Label
+  annotate("segment", size = 1,
+           x = PriorYear3, xend = CurrentMonth , 
+           y = LineAdjPriorYear3, 
+           yend = LineAdjPriorYear3,
+           arrow = arrow(ends = "both", angle = 90, length = unit(.2,"cm"))) +
+  annotate("segment", size = 2,
+           x = PriorYear3, xend = PriorYear3, 
+           y = LineAdjPriorYear3, yend = PriorYear3MetricValue) +
+  annotate("label", 
+           label = paste0("36Mo ", percent(MetricValue36MonthChange, accuracy = .1)),
+           x = mean(c(CurrentMonth, PriorYear3)), 
+           y = LineAdjPriorYear3)
+
+} else {
+# Windows uses "size" and linux uses "linewidth"
 Plot1 = PresentationDF %>%
   filter(QuoteDate >= StartDate) %>%
   filter(MetricName == PresentationMetric) %>%
@@ -166,7 +231,97 @@ Plot1 +
   annotate("label", 
            label = paste0("36Mo ", percent(MetricValue36MonthChange, accuracy = .1)),
            x = mean(c(CurrentMonth, PriorYear3)), 
-           y = LineAdjPriorYear3)
+           y = LineAdjPriorYear3)  
+}
+
+}
+
+# 2nd Function to Plot a 3 Month Running Rate Change * 4 to Annualize
+EconPlot_RunRate = function(MetricName, StartLag, LineColor) {
+
+PresentationMetric = MetricName
+DisplayMetric = str_sub(MetricName, 1, str_locate(MetricName, "3M")[1]-1)
+CurrentMonth = max(filter(PresentationDF, MetricName == PresentationMetric)$QuoteDate)
+StartDate = CurrentMonth - months(StartLag)
+DateRange = seq.Date(StartDate, CurrentMonth, by = "month")
+PriorYear = CurrentMonth - months(12)
+PriorYear2 = CurrentMonth - months(24)
+PriorYear3 = CurrentMonth - months(36)
+EndingMetricValue = filter(PresentationDF, MetricName == PresentationMetric, QuoteDate == CurrentMonth)$MetricValue
+PriorYearMetricValue = filter(PresentationDF, MetricName == PresentationMetric, QuoteDate == PriorYear)$MetricValue
+PriorYear2MetricValue = filter(PresentationDF, MetricName == PresentationMetric, QuoteDate == PriorYear2)$MetricValue
+PriorYear3MetricValue = filter(PresentationDF, MetricName == PresentationMetric, QuoteDate == PriorYear3)$MetricValue
+MetricValue12MonthChange = (EndingMetricValue / PriorYearMetricValue) - 1
+MetricValue24MonthChange = ((EndingMetricValue / PriorYear2MetricValue) - 1) / 2
+MetricValue36MonthChange = ((EndingMetricValue / PriorYear3MetricValue) - 1) / 3
+LineAdjPriorYear2 = EndingMetricValue +
+                      (EndingMetricValue - 
+                      min(filter(PresentationDF, QuoteDate >= StartDate)$MetricValue)) * .01
+LineAdjPriorYear2 = if_else(LineAdjPriorYear2 < EndingMetricValue + 1, EndingMetricValue + 1,
+                            LineAdjPriorYear2)
+LineAdjPriorYear3 = EndingMetricValue +
+                      (EndingMetricValue - 
+                      min(filter(PresentationDF, QuoteDate >= StartDate)$MetricValue)) * .02
+LineAdjPriorYear3 = if_else(LineAdjPriorYear3 < EndingMetricValue + 2, EndingMetricValue + 2,
+                            LineAdjPriorYear3)
+
+if (str_detect(.Platform$OS.type, "win")) {
+# Windows uses "size" and linux uses "linewidth"
+Plot1 = PresentationDF %>%
+  filter(QuoteDate >= StartDate) %>%
+  filter(MetricName == PresentationMetric) %>%
+  ggplot(aes(QuoteDate, MetricValue)) +
+   geom_line(size = 2, color = LineColor, na.rm = TRUE) +
+   theme_classic() +
+   theme(text=element_text(size=16),
+         plot.caption=element_text(size=12),
+         axis.text=element_text(size=10),
+         axis.text.x = element_text(angle = 90, vjust = 0.5)) +  
+  scale_x_date(labels = date_format("%Y-%b"), 
+               breaks = DateRange) +
+  scale_y_continuous(labels = percent_format(accuracy = 0.1)) +
+  labs(title = paste0("Rolling 3 Month Rate Change in ", DisplayMetric, " Annualized"),
+      color = "",
+      caption = paste0("Source : St. Louis Federal Reserve - FRED.  As of ", Sys.Date()),
+      y = "",
+      x = "")
+  
+Plot1 +
+  # Ending Value Label
+  annotate("label", 
+           label = paste0(percent(EndingMetricValue, accuracy = .1)),
+           x = CurrentMonth, 
+           y = EndingMetricValue)
+
+} else {
+# Windows uses "size" and linux uses "linewidth"
+Plot1 = PresentationDF %>%
+  filter(QuoteDate >= StartDate) %>%
+  filter(MetricName == PresentationMetric) %>%
+  ggplot(aes(QuoteDate, MetricValue)) +
+   geom_line(linewidth = 2, color = LineColor, na.rm = TRUE) +
+   theme_classic() +
+   theme(text=element_text(size=16),
+         plot.caption=element_text(size=12),
+         axis.text=element_text(size=10),
+         axis.text.x = element_text(angle = 90, vjust = 0.5)) +  
+  scale_x_date(labels = date_format("%Y-%b"), 
+               breaks = DateRange) +
+  scale_y_continuous(labels = percent_format(accuracy = 0.1)) +
+  labs(title = paste0("Annualized Changes in ", DisplayMetric),
+      color = "",
+      caption = paste0("Source : St. Louis Federal Reserve - FRED.  As of ", Sys.Date()),
+      y = "",
+      x = "")
+
+Plot1 +
+  # Ending Value Label
+  annotate("label", 
+           label = paste0(percent(EndingMetricValue, accuracy = .1)),
+           x = CurrentMonth, 
+           y = EndingMetricValue)
+
+}
 
 }
 
@@ -185,6 +340,16 @@ EconPlot("CPI", 48, "dark red")
 
 Here we can see that the shorter term 1 year inflation of `r percent(MetricChange("CPI", 12), accuracy = .1)` is significantly different than the longer term annualized 2 year rate of `r percent(MetricChange("CPI", 24), accuracy = .1)` or 3 year rate of `r percent(MetricChange("CPI", 36), accuracy = .1)`.
 
+It's also useful to look at shorter term trends as these 12 to 36 month trends take awhile to register near term impacts due to changes in government policy or other macroeconomic factors.  Here we will look at the rolling change from 3 months ago annualized (multiplied by 4).  There is no seasonal adjustment.
+
+```{r fig.width = 10}
+
+EconPlot_RunRate("CPI3MRunRate", 48, "dark red")
+
+```
+
+Here you can see the more drastic short term changes.
+
 Next we will look at CPI Core Index which is similar to the CPI but it excludes energy and food which tend to be more volatile.  Because that volatility is excluded, the CPI Core is favored as a better indicator of inflation in the short term.  [Investopedia's Core CPI Page](https://www.investopedia.com/terms/c/coreinflation.asp)
 
 ```{r fig.width = 10}
@@ -192,6 +357,14 @@ EconPlot("CPICore", 48, "blue")
 ```
 
 Here we can see the contrast in the 1yr change of the CPI Core at `r percent(MetricChange("CPICore", 12), accuracy = .1)` versus the CPI at `r percent(MetricChange("CPI", 12), accuracy = .1)`.
+
+Now the short term 3 month changes.
+
+```{r fig.width = 10}
+
+EconPlot_RunRate("CPICore3MRunRate", 48, "blue")
+
+```
 
 For an alternative to the CPI measures, the Federal Reserve prefers to gauge inflation using Personal Consumption Expenditures.  The PCE looks at expenditures versus prices for both goods and services and therefore is self adjusting in terms of matching how consumers actually distribute their spending.  [Investopedia's PCE Page](https://https://www.investopedia.com/terms/p/pce.asp)
 
@@ -201,6 +374,14 @@ EconPlot("PCE", 48, "#ff0099")
 
 Here we can see the contrast in the 1yr change of the PCE at `r percent(MetricChange("PCE", 12), accuracy = .1)` versus the CPI at `r percent(MetricChange("CPI", 12), accuracy = .1)`.
 
+Now the short term 3 month changes.
+
+```{r fig.width = 10}
+
+EconPlot_RunRate("PCE3MRunRate", 48, "#ff0099")
+
+```
+
 Finally we will look the Producer Price Index.  The PPI looks at the changes in prices charged by producers, so it is focused on physical goods.  [Investopedia's PPI Page](https://www.investopedia.com/terms/p/ppi.asp)
 
 ```{r fig.width=10}
@@ -208,6 +389,12 @@ EconPlot("PPI", 48, "dark green")
 ```
 
 The changes in the PPI are often more drastic than the CPI as producers are directly subject to labor and raw material costs while consumers have wholesalers and retailers to act as a buffer when price changes are temporary.  The PPI 1yr change of `r percent(MetricChange("PPI", 12), accuracy = .1)` versus the CPI at `r percent(MetricChange("CPI", 12), accuracy = .1)` may demonstrate this.
+
+Now the short term 3 month changes.
+
+```{r fig.width = 10}
+EconPlot_RunRate("PPI3MRunRate", 48, "dark green")
+```
 
 In closing, don't be don't be transitory but instead,
 
@@ -222,8 +409,13 @@ Demonstration <- dbConnect(
                         dataset = "demonstration",
                         billing = "savvy-analytics-42")
 
-bq_auth(path = "/home/woolylinux01/Documents/BQSavvyDemonstration.json")
-
+if (str_detect(.Platform$OS.type, "win")) {
+  bq_auth(path = "C:\\Users\\Chris.Woolery\\OneDrive\\woolylvm01\\BQSavvyDemonstration.json")
+} else {
+  bq_auth(path = "/home/woolylinux01/Documents/BQSavvyDemonstration.json")
+}
+  
+  
 econ_Compare <- dbGetQuery(Demonstration, "SELECT * FROM econ_SRCKeyMeasures")
 ColNames.econ_Compare <- colnames(econ_Compare)
 
