@@ -1,10 +1,11 @@
 ---
 title: "PGA Tour Driving Versus Success"
-author: "by : Chris at Savvy Analytics"
+author: 'by : Chris at Savvy Analytics'
 output:
   html_document:
     df_print: paged
-    code_folding: hide        
+    code_folding: hide
+  pdf_document: default
 ---
 
 
@@ -31,6 +32,7 @@ require(tidyverse)
 require(lubridate)
 require(scales)
 require(kableExtra)
+require(tinytex)
 })
 
 # Create a function to return zero for null and blank values
