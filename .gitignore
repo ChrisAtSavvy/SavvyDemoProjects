@@ -2,12 +2,9 @@
 target/
 dbt_packages/
 logs/
-<<<<<<< HEAD
 *.dcf
 *.html
 *.RData
-=======
 R/rsconnect/
 R/.Rhistory
 R/PGADrivingvsSuccess_files/
->>>>>>> 67e78fcc34232c2378d4d614f3adffc5f20cdfc9
