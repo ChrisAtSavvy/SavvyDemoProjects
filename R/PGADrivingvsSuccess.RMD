@@ -1,0 +1,461 @@
+---
+title: "PGA Tour Driving Versus Success"
+author: 'by : Chris at Savvy Analytics'
+output:
+  html_document:
+    df_print: paged
+    code_folding: hide
+  pdf_document: default
+---
+
+
+<span style="color:blue"><font size="3">Project Goal : </font></span>
+Fans of the PGA Tour and golf in general know that driving distance has increased significantly over the past few decades.
+
+One of my friends, David and I were discussing this development and we both commented that everybody seems to be a long hitter these days and we had a few questions that we hope the statistics can answer: 
+
+1. What kind of advantage do the longest hitters have when it comes to the really important measures like winning and making money?
+
+2. Is there more distance parity now than there was in past decades?
+
+3. Are the shorter hitters at a greater disadvantage now then they used to be?
+
+Note : This article, like most of mine on R-Pubs, is both instructional and investigative.  You can re-create any of these charts and tables from the embedded R code.  Click the "Code" button to view. 
+
+```{r message=FALSE, warning=FALSE}
+# Load libraries, functions and clear environment
+
+rm(list=ls())
+options(scipen=999)
+suppressPackageStartupMessages({
+require(tidyverse)
+require(lubridate)
+require(scales)
+require(kableExtra)
+require(tinytex)
+})
+
+# Create a function to return zero for null and blank values
+zna <- function(x) {
+  x <- ifelse(is.null(x), 0, 
+        ifelse(is.na(x), 0, 
+          ifelse(x == "", 0, x)))
+  return(x)
+}
+
+RJETBlue = "#003365"
+
+PrettyTable = function(TableObject, TableTitle) {
+    TableObject %>%
+      kable("html", escape = FALSE,
+            caption = paste0('<p style="color:black; font-size:18px">',
+            TableTitle,
+            '</p>')) %>%
+        kable_styling("striped",
+                      bootstrap_options = c("hover", "condensed"),
+                      full_width = T) %>%
+        row_spec(0, color = "white", background = RJETBlue) 
+}
+
+#
+# Load Data from Github
+# (Another program was used to scrape the data into these CSV files)
+#
+
+DrivingDistance = read_csv("https://raw.githubusercontent.com/ChrisAtSavvy/SavvyDemoProjects/main/R/PGAStats_DrivingDistance.csv", col_types = "nnccnnn")
+
+DrivingDistance = DrivingDistance %>%
+  filter(!str_detect(Player, "tour"))
+
+DrivingAccuracy = read_csv("https://raw.githubusercontent.com/ChrisAtSavvy/SavvyDemoProjects/main/R/PGAStats_DrivingAccuracy.csv", col_types = "nnccnnn")
+
+DrivingAccuracy = DrivingAccuracy %>%
+  filter(!str_detect(Player, "tour")) 
+
+GreensInRegulation = read_csv("https://raw.githubusercontent.com/ChrisAtSavvy/SavvyDemoProjects/main/R/PGAStats_GreensInRegulation.csv", col_types = "nnccnnn")
+
+GreensInRegulation = GreensInRegulation %>%
+  filter(!str_detect(Player, "tour"))  
+
+PuttsPerRound = read_csv("https://raw.githubusercontent.com/ChrisAtSavvy/SavvyDemoProjects/main/R/PGAStats_PuttsPerRound.csv", col_types = "nnccnnn")
+
+TournamentResults = read_csv("https://raw.githubusercontent.com/ChrisAtSavvy/SavvyDemoProjects/main/R/PGAStats_TournamentResults.csv", col_types = "nncnccn")
+
+TournamentResults = TournamentResults %>%
+  mutate(PrizeMoney = if_else(!is.na(PrizeMoney), PrizeMoney, 0))
+
+AGGDistanceYear = DrivingDistance %>%
+  group_by(Year) %>%
+  summarize(MinDistance = min(AvgDist),
+            Q1Distance = quantile(AvgDist, 0.25),
+            MedDistance = median(AvgDist),
+            MeanDistance = mean(AvgDist),
+            Q3Distance = quantile(AvgDist, 0.75),
+            MaxDistance = max(AvgDist),
+            .groups = "drop") %>%
+  mutate(MinDistance_Label = if_else(Year %in% c(min(Year), round(mean(Year), 0), max(Year)), 
+                                     MinDistance, NA),
+         MeanDistance_Label = if_else(Year %in% c(min(Year), round(mean(Year), 0), max(Year)), 
+                                      MeanDistance, NA),
+         MaxDistance_Label = if_else(Year %in% c(min(Year), round(mean(Year), 0), max(Year)), 
+                                     MaxDistance, NA),
+         MinVsMean = (MinDistance / MeanDistance) - 1,
+         MaxVsMean = (MaxDistance / MeanDistance) - 1,
+         MinVsMean_Label = if_else(Year %in% c(min(Year), round(mean(Year), 0), max(Year)), 
+                                     MinVsMean, NA),
+         MaxVsMean_Label = if_else(Year %in% c(min(Year), round(mean(Year), 0), max(Year)), 
+                                      MaxVsMean, NA)
+         )
+
+# Aggregate Player Tournament Results by Year
+AGGPlayerYear = TournamentResults %>%
+  rename(Year = EventYear) %>%
+  group_by(Year) %>%
+  mutate(YearlyPrizeMoney = sum(PrizeMoney)) %>%
+  ungroup() %>%
+  mutate(Wins = if_else(Order == 1, 1, 0),
+         Top10 = if_else(Order <= 10, 1, 0)) %>%
+  group_by(Year, Player) %>%
+  summarize(Wins = sum(Wins),
+            Top10 = sum(Top10),
+            Cuts = n(),
+            PrizeMoney = sum(PrizeMoney),
+          .groups = "drop")
+
+# Add Stats
+AGGPlayerYear = AGGPlayerYear %>% 
+  inner_join(DrivingDistance %>%
+               rename(DistanceRank = Rank) %>%
+               select(Year, Player, DistanceRank, AvgDist),
+             by = c("Year" = "Year", "Player" = "Player"),
+             multiple = "all") %>%
+  inner_join(DrivingAccuracy %>%
+               rename(DriveAccuracyRank = Rank) %>%
+               select(Year, Player, DriveAccuracyRank, FairwayRate),
+             by = c("Year" = "Year", "Player" = "Player"),
+             multiple = "all") %>%
+  inner_join(GreensInRegulation %>%
+               rename(GreensAccuracyRank = Rank) %>%
+               select(Year, Player, GreensAccuracyRank, GreensRate),
+             by = c("Year" = "Year", "Player" = "Player"),
+             multiple = "all") %>%
+  inner_join(PuttsPerRound %>%
+               rename(PuttsRank = Rank) %>%
+               select(Year, Player, PuttsRank, AvgPutts),
+             by = c("Year" = "Year", "Player" = "Player"),
+             multiple = "all") %>%
+  group_by(Year) %>%
+  mutate(YearlyPrizeMoney = sum(PrizeMoney),
+         DrivingPercentile = 1 - rescale(rank(DistanceRank + DriveAccuracyRank), to = c(0, 1)),
+         DistancePercentile = 1 - rescale(rank(DistanceRank), to = c(0, 1)),
+         GreensPercentile = 1 - rescale(GreensAccuracyRank, to = c(0, 1)),
+         PuttsPercentile = 1 - rescale(PuttsRank, to = c(0, 1)),
+         MoneyPercentile = 1- rescale(rank(PrizeMoney), to = c(1, 0))) %>%
+  group_by(Year, Player) %>%
+  mutate(PercentOfMoney = PrizeMoney / YearlyPrizeMoney) %>%
+  ungroup() %>%
+  arrange(Year, desc(MoneyPercentile))
+
+```
+
+Let's look at the average driving distance of the longest, average and shortest players on the tour since 1987.
+
+```{r fig.width=8}
+
+AGGDistanceYear %>%
+  ggplot() +
+    geom_line(aes(Year, MaxDistance, color = "Longest Player"), linewidth = 1) +
+    geom_line(aes(Year, MedDistance, color = "Average Player"), linewidth = 1) +
+    geom_line(aes(Year, MinDistance, color = "Shortest Player"), linewidth = 1) +
+    geom_smooth(aes(Year, MaxDistance, color = "Longest Player"), 
+                linewidth = 2, formula = "y ~ x", method = "loess", se = F) +
+    geom_smooth(aes(Year, MedDistance, color = "Average Player"), 
+                linewidth = 2, formula = "y ~ x", method = "loess", se = F) +
+    geom_smooth(aes(Year, MinDistance, color = "Shortest Player"), 
+                linewidth = 2, formula = "y ~ x", method = "loess", se = F) +
+    geom_label(aes(Year, MaxDistance, label = comma(MaxDistance_Label, accuracy = 0.1), 
+                   color = "Longest Player"), fill = "white", na.rm = T, show.legend = FALSE) +
+    geom_label(aes(Year, MeanDistance, label = comma(MeanDistance_Label, accuracy = 0.1, 
+                   color = "Average Player")), fill = "white", na.rm = T, show.legend = FALSE) +
+    geom_label(aes(Year, MinDistance, label = comma(MinDistance_Label, accuracy = 0.1), 
+                   color = "Shortest Player"), fill = "white", na.rm = T, show.legend = FALSE) +
+    scale_color_manual(name = "", values = c("Longest Player" = "blue", 
+                                             "Average Player" = "black",
+                                             "Shortest Player" = "#e75480")) +
+    theme_minimal() +
+    theme(legend.position = "bottom") +
+    labs(title = "PGA Driving Distances by Year",
+         y = "Average Yards Per Drive",
+         x = "Year")
+
+
+```
+
+So clearly everybody had gotten longer across the board with average to long hitters gaining 38 yards and even shorter hitters picking up 33 yards which is about 14% in all cases.
+
+Let's put some names to the stats and see who the top two longest and shortest were by year.
+
+```{r}
+
+LongDF = DrivingDistance %>%
+      filter(Rank %in% c(1,2)) %>%
+      mutate(`Longest Player` = Player, `Longest Avg` = AvgDist) %>%
+      select(Year, Rank, `Longest Player`, `Longest Avg`)
+
+ShortDF = DrivingDistance %>%
+      group_by(Year) %>%
+      mutate(ShortRank = rev(Rank)) %>%
+      ungroup() %>%
+      filter(ShortRank %in% c(1,2)) %>%
+      mutate(Rank = ShortRank, `Shortest Player` = Player, `Shortest Avg` = AvgDist) %>%
+      select(Year, Rank, `Shortest Player`, `Shortest Avg`) 
+
+suppressWarnings({
+  TopDistanceDF = 
+  LongDF %>%
+  inner_join(ShortDF, by = c("Year", "Rank"))})
+
+PrettyTable(TopDistanceDF, "Longest and Shortest by Year")
+
+```
+
+```{r fig.width=8}
+
+AGGDistanceYear %>%
+  ggplot() +
+    geom_line(aes(Year, MaxVsMean, color = "Longest vs Average"), linewidth = 1) +
+    geom_line(aes(Year, MinVsMean, color = "Shortest vs Average"), linewidth = 1) +
+    geom_hline(aes(yintercept = 0, color = "Tour Average"), linewidth = 1) +
+#    geom_hline(yintercept = 0, color = "black", linewidth = 2) +
+    geom_smooth(aes(Year, MaxVsMean, color = "Longest vs Average"), 
+                linewidth = 2, formula = "y ~ x", method = "loess", se = F) +
+    geom_smooth(aes(Year, MinVsMean, color = "Shortest vs Average"), 
+                linewidth = 2, formula = "y ~ x", method = "loess", se = F) +
+    geom_label(aes(Year, MaxVsMean, label = percent(MaxVsMean_Label, accuracy = 0.1), 
+                   color = "Longest vs Average"), fill = "white", na.rm = T, show.legend = FALSE) +
+    geom_label(aes(Year, MinVsMean, label = percent(MinVsMean_Label, accuracy = 0.1), 
+                   color = "Shortest vs Average"), fill = "white", na.rm = T, show.legend = FALSE) +
+    scale_color_manual(name = "", values = c("Longest vs Average" = "blue", 
+                                             "Tour Average" = "black",
+                                             "Shortest vs Average" = "#e75480")) +
+    scale_y_continuous(labels = percent_format(accuracy = 1)) +
+    theme_minimal() +
+    theme(legend.position = "bottom") +
+    labs(title = "PGA Driving Distance Differential by Year",
+         y = "Difference From Average",
+         x = "Year")
+
+
+```
+ 
+The longest players are minutely less long than the average player versus 1987 although there was a peak in the early 2000's where the longest players peaked versus the average.  The shortest players have maintained their position versus the average and in the last few years have lost ground.
+
+However given the very small changes of less than 2% over 36 years I think we've got the answer question two question 2.  The distance parity is basically unchanged over the last 36 years
+
+So does that length matter?  Let's look at the ultimate test, prize money!
+
+ 
+```{r fig.width=8}
+
+AGGDistanceQuartiles = AGGPlayerYear %>%
+  mutate(DistanceQuartile = case_when(
+          DistancePercentile > 0.66 ~ "  Longest Third",
+          DistancePercentile > 0.33 ~ " Average Third",
+          TRUE ~ " Shortest Third")) %>%
+  filter(!is.na(DistanceQuartile) & !is.na(PercentOfMoney) & !is.na(Wins)) %>%
+  group_by(Year) %>%
+  mutate(YearlyWins = sum(Wins)) %>%
+  ungroup() %>%
+  group_by(Year, DistanceQuartile) %>%
+  summarize(PercentOfMoney = sum(PercentOfMoney),
+            PercentOfWins = sum(Wins) / min(YearlyWins),
+            .groups = "drop") %>%
+  mutate(PercentOfMoney_Label = if_else(Year %in% c(min(Year), round(mean(Year), 0), max(Year)), 
+                                     PercentOfMoney, NA),
+         PercentOfWins_Label = if_else(Year %in% c(min(Year), round(mean(Year), 0), max(Year)), 
+                                     PercentOfWins, NA)) 
+
+AGGDistanceQuartiles %>%
+  ggplot() +
+    geom_line(aes(Year, PercentOfMoney, color = DistanceQuartile), linewidth = 1) +
+    geom_smooth(aes(Year, PercentOfMoney, color = DistanceQuartile), 
+                linewidth = 2, formula = "y ~ x", method = "loess", se = F) +
+    geom_label(aes(Year, PercentOfMoney, label = percent(PercentOfMoney_Label, accuracy = 0.1), 
+                   color = DistanceQuartile), fill = "white", na.rm = T, show.legend = FALSE) +
+    scale_color_manual(values = c("blue", "black", "#e75480")) +
+    scale_y_continuous(labels = percent_format(accuracy = 1)) +
+    theme_minimal() +
+    theme(legend.position = "bottom") +
+    labs(title = "PGA Annual Prize Money Percentage Per Distance Cohort by Year",
+         color = "",
+         y = "Annual Percentage of Prize Money Won",
+         x = "Year")
+
+```
+
+The longest third of drivers on the tour have increased their percentage of total prize money across each season from 34.9% in 1987 to almost 51% in 2022.  This has been at the direct expense of the shortest third of drivers who have seen their share drop from 27.3% to 14.4%.
+
+You can also see how this trend has accelerated since about 2009 where there was movement toward convergence and then the long drivers started taking the money!
+
+Let's see if there is a similar trend in wins.
+
+```{r fig.width=8}
+
+AGGDistanceQuartiles %>%
+  ggplot() +
+    geom_line(aes(Year, PercentOfWins, color = DistanceQuartile), linewidth = 1) +
+    geom_smooth(aes(Year, PercentOfWins, color = DistanceQuartile), 
+                linewidth = 2, formula = "y ~ x", method = "loess", se = F) +
+    geom_label(aes(Year, PercentOfWins, label = percent(PercentOfWins_Label, accuracy = 0.1), 
+                   color = DistanceQuartile), fill = "white", na.rm = T, show.legend = FALSE) +
+    scale_color_manual(values = c("blue", "black", "#e75480")) +
+    scale_y_continuous(labels = percent_format(accuracy = 1)) +
+    theme_minimal() +
+    theme(legend.position = "bottom") +
+    labs(title = "PGA Annual Percentage of Wins Per Distance Cohort by Year",
+         color = "",
+         y = "Annual Wins",
+         x = "Year")
+```
+
+The longest third of drivers on the tour have increased their share of wins each season from 35.7% in 1987 when they were dead even with the shortest third.  Now that share has increased to 73.3% while the shortest have dropped to 4.4%.
+
+This is a much more dramatic shift than I anticipated.  Before we move on from money and wins I want to validate this by taking a narrow look at just the top 10% of long drivers over the years.
+
+```{r fig.width=8}
+
+AGGTopDrivers = AGGPlayerYear %>%
+  mutate(DistanceQuartile = case_when(
+          DistancePercentile > 0.90 ~ "Longest 10%",
+          TRUE ~ " Shortest 90%")) %>%
+  filter(!is.na(DistanceQuartile) & !is.na(PercentOfMoney) & !is.na(Wins)) %>%
+  group_by(Year) %>%
+  mutate(YearlyWins = sum(Wins)) %>%
+  ungroup() %>%
+  group_by(Year, DistanceQuartile) %>%
+  summarize(PercentOfMoney = sum(PercentOfMoney),
+            PercentOfWins = sum(Wins) / min(YearlyWins),
+            FairwayRate = mean(FairwayRate),
+            GreensRate = mean(GreensRate),
+            AvgPutts = mean(AvgPutts),
+            .groups = "drop") %>%
+  mutate(PercentOfMoney_Label = if_else(Year %in% c(min(Year), round(mean(Year), 0), max(Year)), 
+                                     PercentOfMoney, NA),
+         PercentOfWins_Label = if_else(Year %in% c(min(Year), round(mean(Year), 0), max(Year)), 
+                                     PercentOfWins, NA),
+         FairwayRate_Label = if_else(Year %in% c(min(Year), round(mean(Year), 0), max(Year)), 
+                                     FairwayRate, NA),
+         GreensRate_Label = if_else(Year %in% c(min(Year), round(mean(Year), 0), max(Year)), 
+                                     GreensRate, NA),
+         AvgPutts_Label = if_else(Year %in% c(min(Year), round(mean(Year), 0), max(Year)), 
+                                     AvgPutts, NA)) %>%
+  filter(DistanceQuartile == "Longest 10%") %>%
+  rename(`Percent of Money` = PercentOfMoney, `Percent of Wins` = PercentOfWins,
+         `Fairway Accuracy` = FairwayRate, `Greens In Regulation` = GreensRate,
+         `Putts Per Round` = AvgPutts) %>%
+  pivot_longer(cols = c(`Percent of Money`, `Percent of Wins`, 
+                        `Fairway Accuracy`, `Greens In Regulation`, `Putts Per Round`), 
+               names_to = "MetricName", values_to = "MetricValue") %>%
+  mutate(PercentOfMoney_Label = if_else(!MetricName == "Percent of Money",
+                                        NA, PercentOfMoney_Label),
+         PercentOfWins_Label = if_else(!MetricName == "Percent of Wins",
+                                        NA, PercentOfWins_Label),
+         FairwayRate_Label = if_else(!MetricName == "Fairway Accuracy",
+                                        NA, FairwayRate_Label),
+         GreensRate_Label = if_else(!MetricName == "Greens In Regulation",
+                                        NA, GreensRate_Label),
+         AvgPutts_Label = if_else(!MetricName == "Putts Per Round",
+                                        NA, AvgPutts_Label)
+         )
+
+AGGTopDrivers %>%
+  filter(MetricName %in% c("Percent of Money", "Percent of Wins")) %>%
+  ggplot() +
+    geom_line(aes(Year, MetricValue, color = MetricName), linewidth = 1) +
+    geom_smooth(aes(Year, MetricValue, color = MetricName), 
+                linewidth = 2, formula = "y ~ x", method = "loess", se = F) +
+    geom_label(aes(Year, MetricValue, label = percent(PercentOfMoney_Label, accuracy = 0.1), 
+                   color = MetricName), fill = "white", na.rm = T, show.legend = FALSE) +
+    geom_label(aes(Year, MetricValue, label = percent(PercentOfWins_Label, accuracy = 0.1), 
+                   color = MetricName), fill = "white", na.rm = T, show.legend = FALSE) +
+    scale_color_manual(values = c("darkgreen", "black")) +
+    scale_y_continuous(labels = percent_format(accuracy = 1)) +
+    theme_minimal() +
+    theme(legend.position = "bottom") +
+    labs(title = "PGA Annual Prize and Win Share For Longest 10% of Drivers",
+         color = "",
+         y = "Annual Percentage Won",
+         x = "Year")
+```
+
+If all things were equal, the longest 10% would get about 10% of the wins but again we can see that even for the longest 20 or so hitters they have moved from taking just over 14% of the wins and prize money in 1987 to 22%-24% in 2022. 
+
+So how did the longest hitters go from slightly above average to domination?
+
+Let's wrap this up by looking at some basic tee to green statistics for the longest 10%.
+
+```{r fig.width=8}
+
+AGGTopDrivers %>%
+  filter(MetricName %in% c("Fairway Accuracy", "Greens In Regulation")) %>%
+  ggplot() +
+    geom_line(aes(Year, MetricValue, color = MetricName), linewidth = 1) +
+    geom_smooth(aes(Year, MetricValue, color = MetricName), 
+                linewidth = 2, formula = "y ~ x", method = "loess", se = F) +
+    geom_label(aes(Year, MetricValue, label = percent(FairwayRate_Label, accuracy = 0.1), 
+                   color = MetricName), fill = "white", na.rm = T, show.legend = FALSE) +
+    geom_label(aes(Year, MetricValue, label = percent(GreensRate_Label, accuracy = 0.1), 
+                   color = MetricName), fill = "white", na.rm = T, show.legend = FALSE) +
+    scale_color_manual(values = c("darkgreen", "black")) +
+    scale_y_continuous(labels = percent_format(accuracy = 1)) +
+    theme_minimal() +
+    theme(legend.position = "bottom") +
+    labs(title = "PGA Fairway Accuracy and Greens In Regulation For Longest 10% of Drivers",
+         color = "",
+         y = "Accuracy Rate",
+         x = "Year")
+```
+
+So driving accuracy has suffered slightly for the longest 10% of hitters since 1987 as they are hitting about 55.4% or 7.7 / 14 fairways in 2022 versus 61.5% or 8.6 / 14 fairways in 1987.  
+
+However that hasn't seemed to impact greens hit in regulation which has basically remained unchanged.  It seems that the being 38 yards further down the fairway offsets the slight decrease in accuracy.
+
+For our final stat we will look at putts.
+ 
+```{r fig.width=8}
+
+AGGTopDrivers %>%
+  filter(MetricName %in% c("Putts Per Round")) %>%
+  ggplot() +
+    geom_line(aes(Year, MetricValue, color = MetricName), linewidth = 1) +
+    geom_smooth(aes(Year, MetricValue, color = MetricName), 
+                linewidth = 2, formula = "y ~ x", method = "loess", se = F) +
+    geom_label(aes(Year, MetricValue, label = comma(AvgPutts_Label, accuracy = 0.1), 
+                   color = MetricName), fill = "white", na.rm = T, show.legend = FALSE) +
+    scale_color_manual(values = c("darkgreen")) +
+    theme_minimal() +
+    theme(legend.position = "bottom") +
+    labs(title = "PGA Putts Per Round For Longest 10% of Drivers",
+         color = "",
+         y = "Putts Per Round",
+         x = "Year")
+```
+ 
+This doesn't look like much but we can see that the longest hitters have improved by 0.7 putts per round which directly impacts their score by about 3 strokes per 72 hole tournament.  
+
+Since Greens in Regulation were about the same over the years, the improvement in putting is presumably driven by proximity to the hole.  Unfortunately we don't have data back to 1987 on proximity.  
+
+
+<span style="color:blue"><font size="3">Conclusions : </font></span>
+So to answer our original questions:
+ 
+1. Longer hitters have increased their advantage over the past 36 years with the longest 10% nearly doubling their share of prize money and wins. 
+
+2. The parity in just distance has remained constant with the long, short and average drivers all gaining about the same percentages in distance.
+
+3. Shorter hitters are now at a significant disadvantage.  The shortest third of hitters only wins about 15% of prize money now versus nearly 30% in 1987.  The share of wins has dropped even more dramatically from 35% to 4%.
+
+So if you can't be Savvy; be long.
+
+
+ 

@@ -245,7 +245,9 @@ PeaksvsTroughDF = function(ModelName, PeakTarget, TroughTarget) {
 
 AllModelsDF =  
   bind_rows(
-    PeaksvsTroughDF("BuyAndHold", .0001, 1000)
+    PeaksvsTroughDF("BuyAndHold", .0001, 1000),
+    PeaksvsTroughDF("Sell At -10 Buy At +10", 0.9, 1.1),
+    PeaksvsTroughDF("Sell At -10 Buy At +15", 0.9, 1.15)
   )
 
 AllModelsDF = AllModelsDF %>%
@@ -299,8 +301,8 @@ if (str_detect(.Platform$OS.type, "win")) {
   # Windows format uses "size" for lines and segment
   Plot1 = DisplayDF %>%
     ggplot(aes(WeekBeg, SP500)) +
-      geom_line(aes(color = "Weekly Closing Value"), size = 2) +
-      geom_line(aes(WeekBeg, FedFundsAlt, color = "Fed Funds Rate (Not to scale)"), size = 1) +
+      geom_line(aes(color = "Weekly Closing Value"), linewidth = 2, na.rm = T) +
+      geom_line(aes(WeekBeg, FedFundsAlt, color = "Fed Funds Rate (Not to scale)"), linewidth = 1, na.rm = T) +
       geom_point(aes(WeekBeg, HighValue, color = "Peak to Date"), size = 2) +
       geom_point(aes(WeekBeg, LowValue, color = "Trough Since Last Peak"), size = 2) +
       scale_color_manual(name = "", values = c("Weekly Closing Value" = "black",
@@ -452,7 +454,110 @@ Whether you are in a peak or a trough.
 
 Stay Savvy.
 
-```{r}
+```{r include=FALSE}
+
+## Extra Fun Plot
+StrategyPlot = function(EndingDate, PlotTitle, Strategy) {
+
+#  Test Block
+#  Strategy = "Sell At -10 Buy At +10"
+#  EndingDate = Sys.Date()
+#  PlotTitle = "Test"
+#  rm(DisplayDF, Strategy, EndingDate, PlotTitle)
+
+  DisplayDF = AllModelsDF %>%
+    filter(WeekBeg <= EndingDate) %>%
+    filter(ModelName == Strategy) %>%
+    mutate(SignalLabel = if_else(Signal == "Hold" | lag(Signal) == Signal,
+                                 as.character(NA), Signal),
+           Signal_Last = if_else(Signal == "Hold" | lag(Signal) == Signal,
+                                 as.character(NA), Signal))
+  
+  HighDate = max(DisplayDF$HighDate)
+  StartDate = HighDate - months(12)
+  HighValue = max(DisplayDF$HighValue)
+  LowValue = DisplayDF$LowValue[length(DisplayDF$LowValue)]
+  LowDate = DisplayDF$LowDate[length(DisplayDF$LowDate)]
+  CurrentValue = DisplayDF$SP500[length(DisplayDF$SP500)]
+  PeakLabel = paste0(percent((CurrentValue / HighValue) -1, accuracy = 2), " vs Peak")
+  TroughLabel = if_else(CurrentValue / LowValue > 1,
+                        paste0("+",percent((CurrentValue / LowValue) -1, accuracy = 2), " vs Trough"),
+                        "in Trough")
+  PeakvsTroughLabel = paste0(percent((LowValue / HighValue) -1, accuracy = 2), " Peak vs Trough")
+  
+  DisplayDF = DisplayDF %>%
+    filter(WeekBeg >= StartDate)
+  
+  DisplayDF = DisplayDF %>%
+    left_join(AllSymbolsDF %>%
+                filter(SymbolName == "FedFunds") %>%
+                rename(FedFunds = CloseValue) %>%
+                select(WeekBeg, FedFunds),
+              by = c("WeekBeg")) 
+  DisplayDF = DisplayDF %>%
+    mutate(PositionValueAlt = rescale(PositionValue, c(min(SP500), max(SP500))))
+  
+  # About 30 positions are displayable
+  BreakWeeks = paste0(max(1, round(nrow(DisplayDF) / 30, 1)), " weeks")
+  
+if (str_detect(.Platform$OS.type, "win")) {
+  # Windows format uses "size" for lines and segment
+  DisplayDF %>%
+    ggplot(aes(WeekBeg, SP500)) +
+      geom_line(aes(color = "Weekly Closing Value"), linewidth = 2, na.rm = T) +
+      geom_line(aes(WeekBeg, PositionValueAlt, 
+                    color = "Position Value (Not to scale)"), linewidth = 1, na.rm = T) +
+      geom_label(aes(WeekBeg, SP500, label = SignalLabel), 
+                 size = 2, fill = "white", na.rm = T) +
+      scale_color_manual(name = "", 
+                         values = c("Weekly Closing Value" = "black",
+                                    "Position Value (Not to scale)" = "green")) +
+      scale_x_date(breaks = BreakWeeks) +
+      scale_y_continuous(labels = comma_format(accuracy = 1)) +
+      theme_minimal() +
+      theme(legend.position = "bottom",
+            axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+      labs(title = paste0("SP500 - ", PlotTitle),
+           subtitle = paste0("By Week Through : ", floor_date(EndingDate, unit = "week")),
+           caption = "Peaks = All Time Highs, Troughs are Lowest Points after a Peak",
+           x = "", y = "S&P 500 Index Value")
+
+
+} else {
+  # Linux format uses "linewidth" for lines and segment
+  DisplayDF %>%
+    ggplot(aes(WeekBeg, SP500)) +
+      geom_line(aes(color = "Weekly Closing Value"), linewidth = 2) +
+      geom_line(aes(WeekBeg, PositionValueAlt, 
+                    color = "Position Value (Not to scale)"), linewidth = 1, na.rm = T) +
+      geom_label(aes(WeekBeg, SP500, label = SignalLabel), 
+                 size = 2, fill = "white", na.rm = T) +
+      scale_color_manual(name = "", 
+                         values = c("Weekly Closing Value" = "black",
+                                    "Position Value (Not to scale)" = "green")) +
+      scale_x_date(breaks = BreakWeeks) +
+      scale_y_continuous(labels = comma_format(accuracy = 1)) +
+      theme_minimal() +
+      theme(legend.position = "bottom",
+            axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+      labs(title = paste0("SP500 - ", PlotTitle),
+           subtitle = paste0("By Week Through : ", floor_date(EndingDate, unit = "week")),
+           caption = "Peaks = All Time Highs, Troughs are Lowest Points after a Peak",
+           x = "", y = "S&P 500 Index Value")
+
+} 
+
+}
+
+
+StrategyPlot(Sys.Date(), "Current - Sell at -10%, Buy at +15%", 
+             "Sell At -10 Buy At +15")
+
+StrategyPlot(Sys.Date(), "Current - Sell at -10%, Buy at +10%", 
+         "Sell At -10 Buy At +10")
+
+StrategyPlot(as.Date("2002-04-01"), "Dot-Com Bubble - Sell at -10%, Buy at +10%",
+         "Sell At -10 Buy At +10")
 
 ```
 
