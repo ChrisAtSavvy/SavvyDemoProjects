@@ -1,0 +1,535 @@
+---
+title: "Diversified Portfolios Versus The S&P500"
+author: "by : Chris at Savvy Analytics"
+output:
+  html_document:
+    df_print: paged
+    code_folding: hide        
+---
+
+<span style="color:blue"><font size="4">Project Goal  </font></span><br>
+Traditional investing advise suggests that diversifying your long term growth portfolio across stocks, bonds and international markets will lead to either favorable returns, favorable risk or both.
+
+Let's take some simple portfolios and see if we can prove that theory with historical data.
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# Clear Environment and load libraries
+# Optional memory clear
+rm(list=ls())
+# Disable Scientific Notation in printing
+options(scipen=999)
+
+# Load libraries
+QuietLoad <- function(library) {
+  suppressWarnings(suppressPackageStartupMessages(
+    library(library, character.only=TRUE)))
+}
+
+RunMode = "Windows"
+
+if (RunMode == "Linux") {
+  ArchiveFile = "/home/woolyadmin/R/StockMarketSectorPECycles.RData"
+} else {
+  ArchiveFile = "C:\\Users\\Chris.Woolery\\OneDrive - Republic Airways\\Documents\\RepoArchive\\SavvyDemoProjects\\R\\StockMarketSectorPECycles.RData"
+}
+
+
+```
+
+
+
+```{r}
+
+# Environment and Functions Section
+
+QuietLoad('tidyverse')
+QuietLoad('quantmod')
+QuietLoad('lubridate')
+QuietLoad('scales')
+QuietLoad('janitor')
+QuietLoad('zoo')
+QuietLoad('kableExtra')
+QuietLoad('ggrepel')
+QuietLoad('DT')
+
+RJETBlue = "#003365"
+
+PrettyTable = function(TableObject, TableTitle) {
+    TableObject %>%
+      kable("html", escape = FALSE,
+            caption = paste0('<p style="color:black; font-size:18px">',
+            TableTitle,
+            '</p>')) %>%
+        kable_styling("striped",
+                      bootstrap_options = c("hover", "condensed"),
+                      full_width = TRUE) %>%
+        row_spec(0, color = "white", background = RJETBlue) 
+}
+
+ 
+```
+
+Note : This article, like most of mine on R-Pubs, is both instructional and investigative. You can re-create any of these charts and tables from the embedded R code. Click the “Code” button to view.
+
+```{r}
+
+# Data Load and Initial Data Definition Section
+
+
+PortfolioInitialInvestment = 100000
+
+PortfolioList = tibble::tribble(
+        ~Portfolio, ~Symbol,                                  ~SymbolName, ~Weight,
+"AM - All Money Mkt",      "VMFXX",                "Vanguard Federal Money Fund",       1,
+"AB - All Bond",           "PIMIX",                         "Pimco Income Trust",       1,
+"AS - All SP500 Index",    "SPY",                               "SP500 SPDR ETF",       1,
+"DI - Div Intl 4U 2E 2A 2X", "SPY",                               "SP500 SPDR ETF",     0.4,
+"DI - Div Intl 4U 2E 2A 2X", "VEUSX",                        "Vanguard Euro Stock",     0.2,
+"DI - Div Intl 4U 2E 2A 2X", "VEMAX",                    "Vanguard Emerging Stock",     0.2,
+"DI - Div Intl 4U 2E 2A 2X", "VPADX",                    "Vanguard Asia Pac Stock",     0.2,
+"DU - Div US 6S 3B 1M",      "SPY",                               "SP500 SPDR ETF",     0.6,
+"DU - Div US 6S 3B 1M",      "PIMIX",                         "Pimco Income Trust",     0.3,
+"DU - Div US 6S 3B 1M",      "VMFXX",                "Vanguard Federal Money Fund",     0.1
+  )
+
+SecuritySymbols = PortfolioList$Symbol %>% unique()
+
+# THe following code runs in a hidden block as it creates messsages that can't be supressed
+# getSymbols(SecuritySymbols, 
+#            src='yahoo', from = '1900-01-01', 
+#            to = Sys.Date(), warnings = TRUE)
+
+
+```
+
+```{r include=FALSE}
+# Faking VMFXX from 1 Year Treasury Returns
+suppressWarnings({
+suppressMessages({
+getSymbols("DGS1", src = "FRED")
+})
+})
+
+VMFXX = DGS1 %>%
+  data.frame() %>%
+  mutate(Col1 = 0, Col2 = 0, Col3 = 0, Col4 = 0, Col5 = 0,
+         QuoteDate = as.Date(row.names(.), "%Y-%m-%d"),
+         Elapsed =  difftime(QuoteDate, lag(QuoteDate, n=1), unit = "days") %>%
+                      as.numeric()) %>%
+  rename(CloseValue = DGS1) %>%
+  relocate(CloseValue, .after = everything()) %>%
+  fill(CloseValue, .direction = c("down")) %>%
+  filter(!is.na(Elapsed)) %>%
+  mutate(IntRate = (CloseValue / 36500) * Elapsed,
+         TotalReturn = cumprod(1 + IntRate)) %>%
+  select(Col1, Col2, Col3, Col4, Col5, TotalReturn)
+
+suppressWarnings({
+suppressMessages({
+getSymbols(SecuritySymbols[! SecuritySymbols %in% c("VMFXX")], 
+           src='yahoo', from = '1900-01-01', 
+           to = Sys.Date(), warnings = TRUE)
+})
+})
+```
+
+
+```{r}
+
+# Data transformation section
+
+# Function to convert yahoo stock quotes to a data frame
+StockToDF = function(XTSObject, StockName) {
+  data.frame(XTSObject) %>%
+      # Use Close Value = 4 or Adjusted Value = 6 to include dividends and splits
+      rename(CloseValue = 6) %>%
+      mutate(Symbol = StockName,
+             QuoteDate = as.Date(row.names(.), "%Y-%m-%d"),
+             WeekBeg = floor_date(QuoteDate, unit = "week")) %>%
+      group_by(WeekBeg) %>%
+      mutate(MaxDate = max(QuoteDate)) %>%
+      ungroup() %>%
+      filter(QuoteDate == MaxDate) %>%
+      dplyr::select(Symbol, WeekBeg, CloseValue) %>%
+      filter(!is.na(CloseValue))}
+
+for (i in 1:length(SecuritySymbols)) {
+  Temp = StockToDF(get(SecuritySymbols[i]), SecuritySymbols[i])
+  if (i == 1){
+    TRANSecurity = Temp
+  } else {
+    TRANSecurity = bind_rows(TRANSecurity, Temp)
+  }
+}
+
+suppressWarnings({
+suppressMessages({
+rm(list = SecuritySymbols)
+rm(DGS1)
+})
+})
+
+suppressWarnings({
+suppressMessages({
+TRANPortfolio = PortfolioList %>%
+  left_join(TRANSecurity, by = "Symbol") %>%
+  # Get first date of each symbol within a portfolio
+  group_by(Portfolio, Symbol) %>%
+    mutate(SymbolFirstDate = min(WeekBeg),
+           SymbolLastDate = max(WeekBeg)) %>%
+    ungroup() %>%
+  # Filter so that there is a common starting date for portfolio history with all stocks
+  # represented
+  group_by(Portfolio) %>%
+    mutate(PortfolioFirstDate = max(SymbolFirstDate),
+           PortfolioLastDate = min(SymbolLastDate)) %>%
+  # All Portfolios Start Together
+  ungroup() %>%
+  filter(WeekBeg >= max(PortfolioFirstDate) &
+         WeekBeg <= min(PortfolioLastDate)) %>%
+
+
+  # Filter to a specific start date if desired
+  #
+  #filter(WeekBeg >= "2014-10-01") %>%
+  #
+  # Reset the first data of each stock so that we can have a beginning share count
+  group_by(Portfolio, Symbol) %>%
+    mutate(SymbolFirstDate = min(WeekBeg)) %>%
+    mutate(SharesOwned = if_else(WeekBeg == SymbolFirstDate,
+                                 (Weight * PortfolioInitialInvestment) / CloseValue,
+                                  NA)) %>%
+  fill(SharesOwned, .direction = "down") %>%
+  mutate(SymbolValue = SharesOwned * CloseValue,
+         SymbolReturn = if_else(lag(SymbolValue, n = 1, default = 0) == 0,
+                                0,
+                                SymbolValue / lag(SymbolValue, n = 1, default = 0) -1),
+         SymbolReturn = cumsum(SymbolReturn))
+})
+})
+
+AGGPortfolio = TRANPortfolio %>%
+  group_by(Portfolio, WeekBeg) %>%
+  summarize(SymbolValue = sum(SymbolValue), .groups = "drop") %>%
+  group_by(Portfolio) %>%
+  mutate(FinalValue = if_else(WeekBeg == max(WeekBeg), SymbolValue, NA),
+         FinalCAGR = if_else(!is.na(FinalValue),
+                             paste0(dollar(FinalValue / 1000, accuracy = .1), "K",
+                              " ",
+                              percent((FinalValue / PortfolioInitialInvestment)^
+                                (1/as.numeric(difftime(max(WeekBeg), min(WeekBeg), units = "days") / 365.4))-1
+                                ,
+                                accuracy = 0.1)),
+                      NA)) %>%
+  ungroup() %>%
+  mutate(Portfolio = factor(Portfolio))
+
+
+ColorLevels <- levels(AGGPortfolio$Portfolio)
+ColorVec <- setNames(hcl(h = seq(15, 375, length = length(ColorLevels)), 
+                     l = 65, 
+                     c = 100), 
+                     ColorLevels)
+ColorVec[c("AB - All Bond", "AM - All Money Mkt", "AS - All SP500 Index")] <- c("grey", "black", "red")
+
+LineTypeVec = c(rep("solid", 3), rep("longdash", length(ColorLevels)-3))
+
+
+```
+
+Here are the simple portfolios I have created and their contents:
+
+1. AS - All SP500 Index : The US stock market via the S&P 500 "SPY" ETF.
+2. AB - All Bond : The US bond market via PIMCO Income fund "PIMIX".
+3. AM - All Money Market : Money market rates via Vanguard Federal Money Market "VMFXX".
+4. DU - Div US 6S 3B 1M : Diversified US with 60% SPY, 30% PMIX and 10% VMFXX.
+5. DI - Div Intl 4U 2E 2A 2X : Diversified International Stock with 40% SPY, 20% Vanguard Euro "VEUSX", 20% Vanguard Asia Pacific "VPADX" and 20% Vanguard Emerging Market "VEMAX".
+
+I could have used other funds but these are fairly generic, on the lower end in terms of fees and on the higher end in terms of total assets.
+ 
+```{r}
+
+datatable(PortfolioList,
+          rownames = FALSE,
+            caption = htmltools::tags$caption(
+              "Portfolios and Contents",
+              style =   "color: darkblue; 
+                        font-size: 20px; 
+                        text-align: center;"),
+          filter = 'top', 
+          options = list(pageLength = 10, autoWidth = TRUE))
+```
+
+Let's look at the performance since the inception of the youngest of these funds on `r min(AGGPortfolio$WeekBeg)`.
+
+```{r fig.height=8, fig.width=10}
+
+AGGPortfolio %>%
+  ggplot(aes(WeekBeg, SymbolValue)) +
+    geom_line(aes(color = Portfolio), linewidth = 2) +
+    geom_label(aes(WeekBeg, FinalValue, 
+                   label =  FinalCAGR), 
+               fill = "white", na.rm = TRUE, size = 4) +
+    facet_wrap(~Portfolio, nrow = 3) +
+    scale_color_manual(values = ColorVec) +
+    scale_y_continuous(labels = dollar_format(accuracy = 1),
+                       expand = c(0.15, 0)) +
+    scale_x_date(expand = c(0.2, 0)) +
+    theme_classic() +
+    theme(legend.position = "none") +
+    labs(title = "Portfolio Performance Comparison - Gross Value and CAGR",
+         subtitle = paste0("Weeks Ending : ", min(AGGPortfolio$WeekBeg), " - ", max(AGGPortfolio$WeekBeg)),
+         x = "",
+         y = "Portfolio Value",
+         caption = "Starting Investment of $100K")
+
+
+```
+
+Here we see the ending value and the Compounded Average Annual Growth Rate (CAGR) which is the annualized rate of return that would produce that same ending value.
+
+It looks like the US S&P 500 outperformed everything else in terms of return but what about risk?
+
+Let's look at the range of the portfolio value where each data point is a week across the life of the portfolio.
+
+```{r fig.height=5, fig.width=10}
+
+AGGPortfolio %>%
+  ggplot(aes(Portfolio, SymbolValue)) +
+    stat_boxplot(geom ='errorbar', width = 0.2) + 
+    geom_boxplot(aes(fill = Portfolio), width = 0.3) +
+    geom_jitter(color = "grey40", width = 0.1, size = 1.5, alpha = 0.3) +
+    scale_fill_manual(values = ColorVec) +
+    scale_y_continuous(labels = dollar_format(accuracy = 1)) +
+    theme_classic() +
+    theme(legend.position = "none") +
+    labs(title = "Portfolio Performance Comparison - Gross Value Variance",
+         subtitle = paste0("Weeks Ending : ", min(AGGPortfolio$WeekBeg), " - ", max(AGGPortfolio$WeekBeg)),
+         x = "",
+         y = "Portfolio Value",
+         caption = "Starting Investment of $100K")
+
+
+```
+
+The risk profile of the money market is the lowest but contrary to traditional advice, we see similar "worst case" losses when comparing the S&P 500 to the International equity portfolio.  
+
+Likewise, the bond and diversified US portfolios had favorable "worst case" losses but the were still below the 25th percentile loss of the S&P500.
+
+```{r}
+
+AGGPortfolioRate = AGGPortfolio %>%
+  group_by(Portfolio) %>%
+  mutate(ReturnRate = SymbolValue / lag(SymbolValue, n = 1, default = NA) - 1,
+         ReturnRate = if_else(is.na(ReturnRate), 0, ReturnRate)) %>%
+  ungroup()
+
+AGGPortfolioRate_Wide = AGGPortfolioRate %>%
+  pivot_wider(id_cols = c(WeekBeg), names_from = Portfolio, values_from = ReturnRate)
+
+AGGPortfolio_Summary = AGGPortfolioRate %>%
+  mutate(Year = year(WeekBeg)) %>%
+  group_by(Portfolio, Year) %>%
+  summarize(StartDate = min(WeekBeg),
+            EndDate = max(WeekBeg),
+            TotalReturn = sum(ReturnRate), .groups = "drop")
+
+#LM_ComparePortfolio = "AM - All Money Mkt"
+LM_ComparePortfolio = "AS - All SP500 Index"
+
+i = 35
+for (i in 1:nrow(AGGPortfolio_Summary)) {
+  TempLM_x = AGGPortfolioRate$ReturnRate[AGGPortfolioRate$Portfolio == LM_ComparePortfolio
+                                         & year(AGGPortfolioRate$WeekBeg) == AGGPortfolio_Summary$Year[i]]
+  Ending_x = AGGPortfolioRate$SymbolValue[AGGPortfolioRate$Portfolio == LM_ComparePortfolio
+                                         & year(AGGPortfolioRate$WeekBeg) == AGGPortfolio_Summary$Year[i]]
+  Ending_x = Ending_x[length(Ending_x)]
+  TempLM_y = AGGPortfolioRate$ReturnRate[AGGPortfolioRate$Portfolio == AGGPortfolio_Summary$Portfolio[i]
+                                         & year(AGGPortfolioRate$WeekBeg) == AGGPortfolio_Summary$Year[i]]
+  Ending_y = AGGPortfolioRate$SymbolValue[AGGPortfolioRate$Portfolio == AGGPortfolio_Summary$Portfolio[i]
+                                         & year(AGGPortfolioRate$WeekBeg) == AGGPortfolio_Summary$Year[i]]
+  Ending_y = Ending_y[length(Ending_y)]
+  TempLM = lm(TempLM_y ~ TempLM_x)
+  Temp = tibble(
+    Portfolio = AGGPortfolio_Summary$Portfolio[i],
+    Year = AGGPortfolio_Summary$Year[i],
+    Alpha = Ending_y / Ending_x,
+    Beta = TempLM$coefficients[2] %>% as.numeric(),
+    SDRes = TempLM$residuals %>% sd())  
+  if (i == 1){
+    AGGPortfolio_LM = Temp
+  } else {
+    AGGPortfolio_LM = bind_rows(AGGPortfolio_LM, Temp)
+  }
+}
+
+AGGPortfolio_Summary = AGGPortfolio_Summary %>%
+  inner_join(AGGPortfolio_LM,
+             by = c("Portfolio", "Year"))
+
+
+```
+
+The value-range analysis is somewhat captive to the start date of our portfolio in terms of "worst case" so let's instead do a true alpha / beta analysis analysis.  [Investopedia - Alpha and Beta](https://www.investopedia.com/ask/answers/102714/whats-difference-between-alpha-and-beta.asp)
+
+```{r fig.height=7, fig.width=10}
+
+AGGPortfolio_Summary %>%
+  ggplot(aes(Beta, Alpha)) +
+    geom_hline(aes(yintercept = 1), color = "red") +
+    geom_vline(aes(xintercept = 1), color = "red") +
+    geom_point(aes(color = Portfolio), size = 6) +
+    scale_color_manual(values = ColorVec) +
+    scale_x_continuous(breaks = seq(0, 1.25, 0.125)) +
+    scale_y_continuous(breaks = seq(0.2, 1.8, 0.2)) +
+    theme(legend.position = "top") +
+    labs(title = "Portfolio Risk and Return",
+         subtitle = paste0("Weeks Ending : ", min(AGGPortfolio$WeekBeg), " - ", max(AGGPortfolio$WeekBeg)),
+         x = "Relative Risk vs SP500 (Beta)",
+         y = "Relative Return vs SP500 (Alpha)")
+
+
+```
+
+Each data point is a calendar year in the life of the portfolio (see the appendix for a detailed table).  
+
+Typically alpha and beta are made in comparison to the investment class benchmark index but for this analysis, all are compared to the S&P 500 which is represented by the single red dot.
+
+Dots higher than 1 on the Y (Alpha) axis represent years where the return was higher than the S&P 500 while dots lower than 1 represent years where the return was lower.
+
+Dots less than 1 on the X (Beta) axis represent years where the risk was lower than the S&P 500 while dots higher than 1 represent years where the risk was higher.
+
+In the past years of history, we can see that bonds and our diversified US portfolio are the only portfolios that have out-performed the S&P 500 in a significant percentage of the years.
+
+```{r fig.height=5, fig.width=10}
+
+AGGPortfolio_Summary %>%
+  ggplot(aes(Year, TotalReturn)) +
+    geom_line(aes(color = Portfolio, linetype = Portfolio), linewidth = 1.5) +
+#    geom_point(aes(color = Portfolio), size = 2) +
+    scale_y_continuous(labels = percent_format(accuracy = 1)) +
+    scale_color_manual(values = ColorVec) +
+    scale_linetype_manual(values = LineTypeVec) +
+    theme_classic() +
+    theme(legend.position = "top") +
+    labs(title = "Portfolio Performance Comparison",
+         subtitle = paste0("Weeks Ending : ", min(AGGPortfolio$WeekBeg), " - ", max(AGGPortfolio$WeekBeg)),
+         x = "",
+         y = "Portfolio Annual Return")
+```
+
+Here you can see all of those data points on a timeline.  The bond out-performance was nominal and tended to be in years where rates were dropping.
+
+Finally let's look at the funds inside a few of the diversified portfolios to see how they performed individually.
+
+```{r fig.height=5, fig.width=10}
+XRay = "DU - Div US 6S 3B 1M"
+DisplayDF = TRANPortfolio %>%
+  filter(!is.nan(SymbolReturn) &  Portfolio == XRay) %>%
+  group_by(Symbol, SymbolName) %>%
+  mutate(MaxDate = max(WeekBeg),
+         FinalValue = if_else(MaxDate == WeekBeg, SymbolValue, NA),
+         FinalCAGR = if_else(!is.na(FinalValue),
+                             paste0(dollar(FinalValue / 1000, accuracy = .1), "K",
+                              " ",
+                              percent((FinalValue / (Weight * PortfolioInitialInvestment))^
+                                (1/as.numeric(difftime(max(WeekBeg), min(WeekBeg), units = "days") / 365.4))-1
+                                ,
+                                accuracy = 0.1)),
+                      NA)) %>%
+  ungroup() %>%
+  mutate(Symbol = factor(Symbol),
+         SymbolName = factor(SymbolName))
+
+
+DisplayDF %>%
+  ggplot(aes(WeekBeg, SymbolValue)) +
+    geom_line(aes(color = SymbolName), linewidth = 1.5) +
+    geom_label_repel(aes(label = FinalCAGR, color = SymbolName), fill = "white", na.rm = TRUE, 
+                     force = 10, min.segment.length = 0, show.legend = FALSE) +  
+    scale_y_continuous(labels = dollar_format(accuracy = 1)) +
+    scale_x_date(expand = c(0.1, 0)) +
+    theme_classic() +
+    theme(legend.position = "top") +
+    labs(title = paste0("Portfolio X-Ray Comparison - Ending Value and CAGR - ", XRay),
+         subtitle = paste0("Weeks Ending : ", min(AGGPortfolio$WeekBeg), " - ", max(AGGPortfolio$WeekBeg)),
+         x = "",
+         y = "Return Rate")
+```
+
+The bond portion of the portfolio had about 2/3 of the total return of the S&P500 and generally had muted peaks and troughs in comparison.
+
+```{r fig.height=5, fig.width=10}
+
+XRay = "DI - Div Intl 4U 2E 2A 2X"
+DisplayDF = TRANPortfolio %>%
+  filter(!is.nan(SymbolReturn) &  Portfolio == XRay) %>%
+  group_by(Symbol, SymbolName) %>%
+  mutate(MaxDate = max(WeekBeg),
+         FinalValue = if_else(MaxDate == WeekBeg, SymbolValue, NA),
+         FinalCAGR = if_else(!is.na(FinalValue),
+                             paste0(dollar(FinalValue / 1000, accuracy = .1), "K",
+                              " ",
+                              percent((FinalValue / (Weight * PortfolioInitialInvestment))^
+                                (1/as.numeric(difftime(max(WeekBeg), min(WeekBeg), units = "days") / 365.4))-1
+                                ,
+                                accuracy = 0.1)),
+                      NA)) %>%
+  ungroup() %>%
+  mutate(Symbol = factor(Symbol),
+         SymbolName = factor(SymbolName))
+
+
+DisplayDF %>%
+  ggplot(aes(WeekBeg, SymbolValue)) +
+    geom_line(aes(color = SymbolName), linewidth = 1.5) +
+    geom_label_repel(aes(label = FinalCAGR, color = SymbolName), fill = "white", na.rm = TRUE, 
+                     force = 10, min.segment.length = 0, show.legend = FALSE) +  
+    scale_y_continuous(labels = dollar_format(accuracy = 1)) +
+    scale_x_date(expand = c(0.1, 0)) +
+    theme_classic() +
+    theme(legend.position = "top") +
+    labs(title = paste0("Portfolio X-Ray Comparison - Ending Value and CAGR - ", XRay),
+         subtitle = paste0("Weeks Ending : ", min(AGGPortfolio$WeekBeg), " - ", max(AGGPortfolio$WeekBeg)),
+         x = "",
+         y = "Return Rate")
+```
+
+The international stock funds all under-performed the US stock market and the US bond market.
+
+<span style="color:blue"><font size="4">Conclusion  </font></span><br>
+Our simple diversified portfolios historically under-performed the S&P 500 over the whole time period but did perform better in some years.  
+
+- The diversified bond portfolio delivered higher returns than the S&P 500 in half of the years with less volatility.   
+- International stock funds consistently under-performed and represented more volatility.
+
+Therefore don't automatically assume that diversification will improve your portfolio.  Ask questions, do research, do the math and in all ways...
+
+Be Savvy
+
+
+<br>
+<br>
+<br>
+<span style="color:blue"><font size="4">Appendix  </font></span><br>
+
+```{r}
+AGGPortfolio_Summary %>%
+  mutate(`Total Return` = percent(TotalReturn, accuracy = 0.1),
+         Beta = comma(Beta, accuracy = 0.001),
+         `Alpha` = comma(Alpha, accuracy = 0.001),
+         `Residual Std Dev` = comma(SDRes, accuracy = 0.001)) %>%
+  arrange(Year, Portfolio) %>%
+  select(Year, Portfolio, `Total Return`, `Alpha`, Beta, `Residual Std Dev`) %>%
+datatable(rownames = FALSE,
+            caption = htmltools::tags$caption(
+              "Portfolio Risk and Return Table",
+              style =   "color: darkblue; 
+                        font-size: 20px; 
+                        text-align: center;"),
+          filter = 'top', 
+          options = list(pageLength = 10, autoWidth = TRUE))
+
+```
+
+
