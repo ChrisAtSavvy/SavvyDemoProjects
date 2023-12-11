@@ -1,0 +1,411 @@
+---
+title: "Regression Metrics Visualized"
+author: "by : Chris at Savvy Analytics"
+output:
+  html_document:
+    df_print: paged
+    code_folding: hide      
+---
+
+<span style="color:blue"><font size="3">Purpose : </font></span><br>
+As analysts, we often use regression analytics as a descriptive tool to explain the relationship between two or more variables.  However there can be a disconnect between reviewing the regression metrics and intuitively understanding them.  To help bolster that intuitive understanding, I will create a series of visualizations and then we will review the metrics.
+
+```{r echo=FALSE, include=FALSE}
+## 1 - Libraries, Environment, Custom Functions and Parameter Defaults
+# Optional memory clear
+rm(list=ls())
+# Disable Scientific Notation in printing
+options(scipen=999)
+# Unload All Packages
+lapply(names(sessionInfo()$otherPkgs), function(pkgs)
+  detach(
+    paste0('package:', pkgs),
+    character.only = T,
+    unload = T,
+    force = T
+  ))
+
+QuietLoad <- function(library) {
+  suppressWarnings(suppressPackageStartupMessages(
+    library(library, character.only=TRUE)))
+}
+
+# Load libraries
+QuietLoad('tidyverse')
+QuietLoad('kableExtra')
+QuietLoad('scales')
+QuietLoad('tidymodels')
+
+RJETBlue = "#003365"
+
+PrettyTable = function(TableObject, TableTitle) {
+    TableObject %>%
+      kable("html", escape = FALSE,
+            caption = paste0('<p style="color:black; font-size:18px">',
+            TableTitle,
+            '</p>')) %>%
+        kable_styling("striped",
+                      bootstrap_options = c("hover", "condensed"),
+                      full_width = TRUE) %>%
+        row_spec(0, color = "white", background = RJETBlue) 
+}
+
+PrettyModelTable = function(ModelObject, TableTitle) {
+    summary(ModelObject)$coefficients %>%
+      round(3) %>%
+      data.frame() %>%
+      rownames_to_column() %>%
+      rename(Variable = 1, StdError = 3, TValue = 4, PValue = 5) %>%
+      bind_rows(tibble(Variable = " R-Squared",
+                       Estimate = summary(ModelObject)$r.squared,
+                       StdError = NA, TValue = NA, PValue = NA)) %>%
+      arrange(Variable) %>%
+      mutate(Significant = case_when(is.na(PValue) ~ "",
+                                 PValue <= .05 & !Variable == "(Intercept)" ~ "Yes",
+                                 TRUE ~"")) %>%
+    kable("html", escape = FALSE,
+          caption = paste0('<p style="color:black; font-size:18px">',
+          TableTitle,
+          '</p>')) %>%
+      kable_styling("striped",
+                    bootstrap_options = c("hover", "condensed"),
+                    full_width = T) %>%
+      row_spec(0, color = "white", background = RJETBlue) 
+}
+
+GetModelDF = function(ModelObject) {
+    ModelDF = summary(ModelObject)$coefficients %>%
+      round(3) %>%
+      data.frame() %>%
+      rownames_to_column() %>%
+      rename(Variable = 1, StdError = 3, TValue = 4, PValue = 5) %>%
+      bind_rows(tibble(Variable = " R-Squared",
+                       Estimate = summary(ModelObject)$r.squared,
+                       StdError = NA, TValue = NA, PValue = NA)) %>%
+      arrange(Variable) %>%
+      mutate(Significant = case_when(is.na(PValue) ~ "",
+                                 PValue <= .05 & !Variable == "(Intercept)" ~ "Yes",
+                                 TRUE ~""))
+    return(ModelDF)
+}
+
+GetModelLabel = function(ModelObject) {
+    ModelDF = GetModelDF(ModelObject)
+    ModelLabel = paste0("R: ", percent(ModelDF[1,2], accuracy = 1),
+                        " M: ", comma(ModelDF[3,2], accuracy = 0.01),
+                        " P: ", comma(ModelDF[3,5], accuracy = 0.001))
+    return(ModelLabel)
+}
+
+# Randomize a percentage of a vector within a defined range
+ReplaceRandom <- function(x, Percentage, RangeMin, RangeMax) {
+  # get the length of the vector
+  n <- length(x)
+  # generate random indices for Percentage % of the values
+  RandomSeed = x * 100
+  set.seed(RandomSeed)
+  Idx <- sample(1:n, size = n * Percentage, replace = FALSE)
+  # generate random values between RangeMin, RangeMax
+  set.seed(RandomSeed)
+  Vals <- runif(n * Percentage, min = RangeMin, max = RangeMax)
+  # replace the values at the indices with the random values
+  x[Idx] <- Vals
+  # return the modified vector
+  return(x)
+}
+
+
+```
+
+Consider a typical multivariate regression equation:
+
+$$ \hat{y} = b + m_1x_1 + m_2x_2 ... m_nx_n $$
+
+The metrics we typically look at are:
+
+**- R-Squared:** The proportion of variance in the dependent variable (y) that is explained by the independent variables (x) in the model, on a scale of 0 to 1 or simply the "explained variance".<br>
+**- Effect Size:** The magnitude of the impact of the independent variables (x) on the dependent variable (y), measured by the coefficients (m) in the model. Each coefficient represents the expected change in y for a one-unit increase in the corresponding x, holding all other x variables constant.<br>
+**- P-Value:** The probability of obtaining a coefficient (m) as extreme as or more extreme than the one observed in the sample, under the null hypothesis that the coefficient is zero. A low p-value indicates that the coefficient is statistically significant, meaning that it is unlikely to be zero by chance.<br>
+
+Note that I and other practitioners may refer to the effect size as slope, the coefficient or m while R-Squared and P-Value are typically not called other names.
+
+```{r}
+SampleSize = 50
+MeanX = 50
+InterceptY = -10
+# Standard Deviation of X, using the T-Score typical ratio of 0.2
+SDX = 0.5 * MeanX
+Slope = seq(1, 5, by = 1)
+# Error that around the Y slope that will be applied
+MeanError = 1 * MeanX
+# Std Error SD of the Mean Error going with values around the typical T-Score ratio of 0.2
+SDError = seq(0.2, 1, by = .2) * MeanError
+ReplaceRate = 0.1
+  
+ParameterDF = crossing(Slope, MeanError, SDError, MeanX, SDX) %>%
+  arrange(Slope, MeanError, SDError, MeanX, SDX)
+
+ 
+for (i in 1:nrow(ParameterDF)) {
+  set.seed(1234)
+  TempDF = tibble(
+      SetID = i,
+      SetLabel = paste0("(",str_pad(i, 2, side="left", pad="0"), ") Sl ",  
+                        ParameterDF$Slope[i] %>% comma(accuracy=0.1),
+                        " Er ", ParameterDF$MeanError[i]  %>% comma(accuracy=0.1),
+                        " SDEr ", ParameterDF$SDError[i]  %>% comma(accuracy=0.1)),
+      AxisX = rnorm(SampleSize, ParameterDF$MeanX[i], ParameterDF$SDX[i]),
+      AxisY = InterceptY +
+              (AxisX * ParameterDF$Slope[i]) 
+               + rnorm(SampleSize, ParameterDF$MeanError[i], ParameterDF$SDError[i])) %>%
+    # Do Random Replacement
+    mutate(AxisX = ReplaceRandom(AxisX, if_else(i %% 5 == 0, 5, i %% 5)*ReplaceRate, 1, 100),
+           AxisY = ReplaceRandom(AxisY, if_else(i %% 5 == 0, 5, i %% 5)*ReplaceRate, 1, 400))
+  TempLM = lm(TempDF$AxisY ~ TempDF$AxisX)
+  TempDF = mutate(TempDF, ModelLabel = paste0("(",str_pad(i, 2, side="left", pad="0"), ") ",
+                                              GetModelLabel(TempLM)))
+  if (i == 1) {
+    CoordinateDF = TempDF
+  } else {
+    CoordinateDF = bind_rows(CoordinateDF, TempDF)
+  }
+}
+```
+
+We will generate some random coordinate sets to see how those metrics apply to both highly correlated and noisy two dimensional data.  Here is how we will do that:
+
+**- Sample Size :** We'll look at the changes in regression metrics as the sample size increases from 50 to 100 and finally 500.<br>
+**- Randomized X :** We will keep this fairly constant using a normal distribution with a mean of `r MeanX` and standard deviation of `r SDX`.<br>
+**- Randomized Y :** We will initially apply a multiplier or slope (M) to X of `r min(Slope)` to `r max(Slope)` and then add a mean error of `r MeanError` with a standard deviation from `r min(SDError)` to `r max(SDError)`.<br>
+**- Further Randomization of Y :** In order to completely disconnect Y as a function of X, we will randomly replace between `r percent(ReplaceRate * 1, accuracy = 1)` and `r percent(ReplaceRate * 5, accuracy = 1)` of the coordinates with random values.<br>
+
+Let's visualize those randomized coordinate sets:
+
+```{r fig.height=10, fig.width=10}
+CoordinateDF %>%
+  ggplot(aes(AxisX, AxisY)) +
+  geom_point(na.rm = T, color = "grey50", size = 1) +
+  geom_smooth(formula="y~x", method="lm", se=F, na.rm = T, 
+              color = "darkred", alpha = 0.5) +
+  facet_wrap(~ModelLabel, ncol = 5) +
+  scale_x_continuous(limits = c(0, 100)) + 
+  scale_y_continuous(limits = c(0, max(CoordinateDF$AxisY))) +
+  theme_classic() +
+  theme(legend.position="none") +
+  labs(title = paste0("Regression Examples - n = ", SampleSize),
+       subtitle = paste0("Slope (M) Targets by Row: ", paste(Slope, collapse = ", "),
+                         " Std Dev Y by Column", paste(SDError, collapse = ", "),
+                         " Noise Rate by Column: ", paste(seq(1:5)*ReplaceRate, collapse = ", ")),
+       x = "", y = "")
+
+```
+
+**Row 1 :** At our lowest sample size of 50, we can see that the first row with the lowest target slope has high P values across the board or in other words it's statistically likely that the slope is zero which makes sense because the even with out the noise in column 1 the measured effect size is low to begin with.  Likewise the R-Squared or explained variance is low as well and both P and R-Squared generally get worse as progressively more noise is introduced in columns 2-5<br>
+
+**Columns 3-5 :** Regardless of the row which corresponds with our target slope (M), columns 3-5 have high noise with random replacement and standard deviation effects working together to create high P Values and low R-Squared values.  The more noise that is introduced, the lower your explained variance will be.<br>
+
+**Rows 4-5, Columns 1-2 :** In these examples we have our highest target slopes with relatively low levels of noise so that means that our P values will be low as it's statistically unlikely that our true slope is zero and our R-Squared / explained variance is relatively high.<br>
+
+You can see that the measured slopes and R-Squared values are generally but not always steadily decreasing in columns 1-5 because the noise is truly random and has inconsistent effects. 
+
+Now what happens if we increase our sample size keeping everything else constant?
+
+```{r fig.height=10, fig.width=10}
+
+SampleSize = 100
+MeanX = 50
+InterceptY = -10
+# Standard Deviation of X, using the T-Score typical ratio of 0.2
+SDX = 0.5 * MeanX
+Slope = seq(1, 5, by = 1)
+# Error that around the Y slope that will be applied
+MeanError = 1 * MeanX
+# Std Error SD of the Mean Error going with values around the typical T-Score ratio of 0.2
+SDError = seq(0.2, 1, by = .2) * MeanError
+ReplaceRate = 0.1
+  
+ParameterDF = crossing(Slope, MeanError, SDError, MeanX, SDX) %>%
+  arrange(Slope, MeanError, SDError, MeanX, SDX)
+
+ 
+for (i in 1:nrow(ParameterDF)) {
+  set.seed(1234)
+  TempDF = tibble(
+      SetID = i,
+      SetLabel = paste0("(",str_pad(i, 2, side="left", pad="0"), ") Sl ",  
+                        ParameterDF$Slope[i] %>% comma(accuracy=0.1),
+                        " Er ", ParameterDF$MeanError[i]  %>% comma(accuracy=0.1),
+                        " SDEr ", ParameterDF$SDError[i]  %>% comma(accuracy=0.1)),
+      AxisX = rnorm(SampleSize, ParameterDF$MeanX[i], ParameterDF$SDX[i]),
+      AxisY = InterceptY +
+              (AxisX * ParameterDF$Slope[i]) 
+               + rnorm(SampleSize, ParameterDF$MeanError[i], ParameterDF$SDError[i])) %>%
+    # Do Random Replacement
+    mutate(AxisX = ReplaceRandom(AxisX, if_else(i %% 5 == 0, 5, i %% 5)*ReplaceRate, 1, 100),
+           AxisY = ReplaceRandom(AxisY, if_else(i %% 5 == 0, 5, i %% 5)*ReplaceRate, 1, 400))
+  TempLM = lm(TempDF$AxisY ~ TempDF$AxisX)
+  TempDF = mutate(TempDF, ModelLabel = paste0("(",str_pad(i, 2, side="left", pad="0"), ") ",
+                                              GetModelLabel(TempLM)))
+  if (i == 1) {
+    CoordinateDF = TempDF
+  } else {
+    CoordinateDF = bind_rows(CoordinateDF, TempDF)
+  }
+}
+ 
+CoordinateDF %>%
+  ggplot(aes(AxisX, AxisY)) +
+  geom_point(na.rm = T, color = "grey50", size = 1) +
+  geom_smooth(formula="y~x", method="lm", se=F, na.rm = T, 
+              color = "darkred", alpha = 0.5) +
+  facet_wrap(~ModelLabel, ncol = 5) +
+  scale_x_continuous(limits = c(0, 100)) + 
+  scale_y_continuous(limits = c(0, max(CoordinateDF$AxisY))) +
+  theme_classic() +
+  theme(legend.position="none") +
+  labs(title = paste0("Regression Examples - n = ", SampleSize),
+       subtitle = paste0("Slope (M) Targets by Row: ", paste(Slope, collapse = ", "),
+                         " Std Dev Y by Column", paste(SDError, collapse = ", "),
+                         " Noise Rate by Column: ", paste(seq(1:5)*ReplaceRate, collapse = ", ")),
+       x = "", y = "")
+
+
+```
+
+By increasing the sample size to 100, we notice two things:
+
+1. Many of the slopes flatten slightly because the randomized noise becomes more significant with the higher sample size.<br>
+2. Most importantly, we see that the P Values begin to decrease across the board because the probability of a measured slope not being zero decreases with the higher sample size.<br>
+
+The other metric trends across columns and down rows are similar to the smaller samle sizes.
+
+Finally, we'll increase our sample size to 500.
+
+```{r fig.height=10, fig.width=10}
+
+SampleSize = 500
+MeanX = 50
+InterceptY = -10
+# Standard Deviation of X, using the T-Score typical ratio of 0.2
+SDX = 0.5 * MeanX
+Slope = seq(1, 5, by = 1)
+# Error that around the Y slope that will be applied
+MeanError = 1 * MeanX
+# Std Error SD of the Mean Error going with values around the typical T-Score ratio of 0.2
+SDError = seq(0.2, 1, by = .2) * MeanError
+ReplaceRate = 0.1
+  
+ParameterDF = crossing(Slope, MeanError, SDError, MeanX, SDX) %>%
+  arrange(Slope, MeanError, SDError, MeanX, SDX)
+
+ 
+for (i in 1:nrow(ParameterDF)) {
+  set.seed(1234)
+  TempDF = tibble(
+      SetID = i,
+      SetLabel = paste0("(",str_pad(i, 2, side="left", pad="0"), ") Sl ",  
+                        ParameterDF$Slope[i] %>% comma(accuracy=0.1),
+                        " Er ", ParameterDF$MeanError[i]  %>% comma(accuracy=0.1),
+                        " SDEr ", ParameterDF$SDError[i]  %>% comma(accuracy=0.1)),
+      AxisX = rnorm(SampleSize, ParameterDF$MeanX[i], ParameterDF$SDX[i]),
+      AxisY = InterceptY +
+              (AxisX * ParameterDF$Slope[i]) 
+               + rnorm(SampleSize, ParameterDF$MeanError[i], ParameterDF$SDError[i])) %>%
+    # Do Random Replacement
+    mutate(AxisX = ReplaceRandom(AxisX, if_else(i %% 5 == 0, 5, i %% 5)*ReplaceRate, 1, 100),
+           AxisY = ReplaceRandom(AxisY, if_else(i %% 5 == 0, 5, i %% 5)*ReplaceRate, 1, 400))
+  TempLM = lm(TempDF$AxisY ~ TempDF$AxisX)
+  TempDF = mutate(TempDF, ModelLabel = paste0("(",str_pad(i, 2, side="left", pad="0"), ") ",
+                                              GetModelLabel(TempLM)))
+  if (i == 1) {
+    CoordinateDF = TempDF
+  } else {
+    CoordinateDF = bind_rows(CoordinateDF, TempDF)
+  }
+}
+ 
+CoordinateDF %>%
+  ggplot(aes(AxisX, AxisY)) +
+  geom_point(na.rm = T, color = "grey50", size = 1) +
+  geom_smooth(formula="y~x", method="lm", se=F, na.rm = T, 
+              color = "darkred", alpha = 0.5) +
+  facet_wrap(~ModelLabel, ncol = 5) +
+  scale_x_continuous(limits = c(0, 100)) + 
+  scale_y_continuous(limits = c(0, max(CoordinateDF$AxisY))) +
+  theme_classic() +
+  theme(legend.position="none") +
+  labs(title = paste0("Regression Examples - n = ", SampleSize),
+       subtitle = paste0("Slope (M) Targets by Row: ", paste(Slope, collapse = ", "),
+                         " Std Dev Y by Column", paste(SDError, collapse = ", "),
+                         " Noise Rate by Column: ", paste(seq(1:5)*ReplaceRate, collapse = ", ")),
+       x = "", y = "")
+
+```
+
+With the increased sample size, P Values below Row 1 are all very low as the probability of a measured slope not being zero again decreases with the higher sample size.<br>
+
+Finally, what can we do with regression models at certain R-Squared values?  I have a personal rule of thumb that any R-Squared above 40% can be useful.  Let's look at a quick classification example.
+
+Let's pick one of the models where the R-Squared is near 40% and pretend that our X variable is an admissions test that predicts if a student will pass the course given that the passing grade is 70%.  The actual course result will be our Y variable.
+
+If the admissions test predicts 70%+ and the student actually scores 70%+ OR the admissions test predicts < 70% and the student actually scores < 70%, we'll consider that to be an accurate prediction.
+
+We will of course do a 75% train, 25% test split with each data set having a similar distribution of Y values.  The model will be calculated on the training data and then applied to the test data to estimate how will the model would do against new data.
+
+```{r}
+
+ModelDF = CoordinateDF %>%
+  mutate(RSQ = as.numeric(str_extract(ModelLabel, "(?<=R:\\s)\\d*")) / 100) %>%
+  filter(RSQ >= 0.37 & RSQ <= 0.6) %>%
+  mutate(RSQ_MIN = min(RSQ)) %>%
+  filter(RSQ == RSQ_MIN) %>%
+  group_by(SetID) %>%
+  mutate(SetID_MIN = min(SetID)) %>%
+  ungroup() %>%
+  filter(SetID == SetID_MIN) %>%
+  select(-c(RSQ_MIN, SetID_MIN))
+
+TrainProportion = .75
+RandomSeed = as.numeric(as.Date("2063-04-05")) + 100
+
+# Create Split
+set.seed(RandomSeed)
+ModelDF_Split = initial_split(ModelDF,
+                           strata = AxisY, prop = TrainProportion)
+
+ModelDF_Train = training(ModelDF_Split)
+ModelDF_Test = testing(ModelDF_Split)
+
+ModelLM = lm(AxisY ~ AxisX, 
+             data = ModelDF_Train)
+
+ModelDF_Test = ModelDF_Test %>%
+  mutate(PredY = predict(ModelLM, ModelDF_Test),
+         PassY = quantile(AxisY, 0.70),
+         Accurate = if_else((PredY >= PassY & AxisY >= PassY)
+                            | (PredY < PassY & AxisY < PassY), 1, 0),
+         Result = if_else(Accurate == 1, "Accurate Prediction", "Bad Prediction")
+         )
+
+PrettyModelTable(ModelLM,
+                 paste0("Set ID (", ModelDF$SetID[1] ,") with Overall R-Squared ", percent(ModelDF$RSQ[1], accuracy = 0.1), 
+                        " - Regression Metrics on Training Subset"))
+
+ModelDF_Test %>%
+  mutate(TotalCount = n()) %>%
+  group_by(Result) %>%
+  summarize(`Accuracy Rate` = percent(n() / min(TotalCount), accuracy = 0.1),
+         .groups = "drop") %>%
+PrettyTable(paste0("Model Prediction Accuracy Where Pass = 70th Percentile - Test Data n=", nrow(ModelDF_Test)))
+
+```
+
+Here we can see that a linear classifier can be reasonably accurate at an R-Squared around 40%.
+
+<span style="color:blue"><font size="3">Conclusions : </font></span><br>
+
+By visualizing a grid of 25 regression models, we can see how noisy data and higher sample sizes impact our model metrics of slope/effect size/(M), R-Squared and P.
+
+In closing, don't be regressive.
+
+Be Savvy
