@@ -115,7 +115,7 @@ It turns out that my initial thought was wrong.  However I guess I'm in good com
 The two key analytical principals that I missed in my original assessment are:<br>
 
 1. You're not picking from two doors at random.  The host bases his choice on YOUR choice and is therefore giving you additional information that you didn't have before you made your original choice.<br>
-2. When you evaluate the odds of something happening, you have to make sure that it is the inverse of the odds of something NOT happening.  Sometimes looking at a problem forwards and backwards will help you see a blind spot.<br>
+2. When you evaluate the odds of something happening, you have to make sure that it is 1 - the odds of something NOT happening.  Sometimes looking at a problem forwards and backwards will help you see a blind spot.<br>
 
 For example, when you pick 1 of 3 doors, you have a 1/3 chance of picking the door with the car behind it and inversely you have 2/3 chance of NOT picking the door with the car behind it.
 
