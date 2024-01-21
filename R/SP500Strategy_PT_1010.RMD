@@ -20,7 +20,7 @@ Theoretically, as long as there is a functional economy in the world the general
     
 However the stock market does not grow at a perfectly steady linear rate.  Instead, it has a history of reaching new all time highs and then drops before gradually climbing to another new all time high.
 
-Let's explore what some of those look like.
+Let's explore the market dips where the price dropped from an all-time high peak by over 15% since 1985.  We'll look at how long it took from peak to trough and then recovery.
 
 ```{r message=FALSE, warning=FALSE, include=FALSE}
 # Clear Environment and load libraries
@@ -54,7 +54,7 @@ if (str_detect(.Platform$OS.type, "win")) {
   ArchiveFile = "/home/woolylinux01/Documents/SavvyDemoProjects/R/SP500Strategy_PT1010.RData"
 }
 
-Offline = FALSE
+Offline = TRUE
 
 if (Offline) {
 
@@ -140,8 +140,8 @@ AllSymbolsDF = bind_rows(
 )
 
 AllSymbolDF_Pivot = AllSymbolsDF %>%
-  pivot_wider(id_cols = WeekBeg, names_from = SymbolName, values_from = CloseValue) %>%
-  filter(complete.cases(.))
+  pivot_wider(id_cols = WeekBeg, names_from = SymbolName, values_from = CloseValue) #%>%
+#  filter(complete.cases(.))
 
 save(list=c("AllSymbolsDF", "AllSymbolDF_Pivot"), file = ArchiveFile) 
 
@@ -173,7 +173,7 @@ PeaksvsTroughDF = function(ModelName, PeakTarget, TroughTarget) {
            PositionShares = as.numeric(NA),
            PositionCash = as.numeric(NA),
            PositionValue = as.numeric(NA)) %>%
-    filter(WeekBeg >= as.Date('1990-01-01'))
+    filter(WeekBeg >= as.Date('1985-01-01'))
   
   i = 1
     CurrHighValue = SP500Wip$SP500[i]
@@ -265,15 +265,18 @@ AllModelsDF = AllModelsDF %>%
 # given a date range
 #EndingDate = Sys.Date()
 #PlotTitle = "Current"
-PeakPlot = function(EndingDate, PlotTitle) {
+PeakPlot = function(EndingDate, PlotTitle, StartDate = NULL, ShowAnnotations = NULL) {
 
   DisplayDF = AllModelsDF %>%
     filter(WeekBeg <= EndingDate & ModelName == "BuyAndHold")
   
   HighDate = max(DisplayDF$HighDate)
-  StartDate = HighDate - months(12)
+  if (is.null(StartDate)) {
+    StartDate = HighDate - months(6)
+  }
   HighValue = max(DisplayDF$HighValue)
   LowValue = DisplayDF$LowValue[length(DisplayDF$LowValue)]
+  HighDate = DisplayDF$HighDate[length(DisplayDF$HighDate)]
   LowDate = DisplayDF$LowDate[length(DisplayDF$LowDate)]
   CurrentValue = DisplayDF$SP500[length(DisplayDF$SP500)]
   PeakLabel = paste0(percent((CurrentValue / HighValue) -1, accuracy = 2), " vs Peak")
@@ -281,7 +284,20 @@ PeakPlot = function(EndingDate, PlotTitle) {
                         paste0("+",percent((CurrentValue / LowValue) -1, accuracy = 2), " vs Trough"),
                         "in Trough")
   PeakvsTroughLabel = paste0(percent((LowValue / HighValue) -1, accuracy = 2), " Peak vs Trough")
-  
+  if (!is.null(ShowAnnotations)) {
+    CycleLabel = paste0(as.character(difftime(EndingDate, HighDate, unit = "days")), 
+                        " day cycle : ",
+                        as.character(difftime(LowDate, HighDate, unit = "days")), 
+                        " days from prior peak on ", HighDate, 
+                        " to trough on ", LowDate, " then ",
+                        as.character(difftime(EndingDate, LowDate, unit = "days")),
+                        " days from trough to ", EndingDate)
+  }  else {
+    CycleLabel = paste0("Current market is ", if_else(CurrentValue - HighValue > 0, "+", ""),
+                        percent((CurrentValue - HighValue) / HighValue, accuracy = 0.1),
+                        " versus recent peak on ", HighDate)
+  }
+
   DisplayDF = DisplayDF %>%
     filter(WeekBeg >= StartDate)
   
@@ -297,8 +313,7 @@ PeakPlot = function(EndingDate, PlotTitle) {
   # About 30 positions are displayable
   BreakWeeks = paste0(max(1, round(nrow(DisplayDF) / 30, 1)), " weeks")
   
-if (str_detect(.Platform$OS.type, "win")) {
-  # Windows format uses "size" for lines and segment
+  # Refactoring code 12/29/2023 as now both linux and Windows format uses "linewidth"
   Plot1 = DisplayDF %>%
     ggplot(aes(WeekBeg, SP500)) +
       geom_line(aes(color = "Weekly Closing Value"), linewidth = 2, na.rm = T) +
@@ -315,61 +330,12 @@ if (str_detect(.Platform$OS.type, "win")) {
       theme(legend.position = "bottom",
             axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
       labs(title = paste0("SP500 - ", PlotTitle),
-           subtitle = paste0("By Week Through : ", floor_date(EndingDate, unit = "week")),
+           subtitle = CycleLabel,
            caption = "Peaks = All Time Highs, Troughs are Lowest Points after a Peak",
            x = "", y = "S&P 500 Index Value")
 
-  Plot1 +
-    # Peak Line and Label
-    annotate("segment", size = 1,
-             x = HighDate, xend = EndingDate,
-             y = HighValue, yend = HighValue,
-             arrow = arrow(ends = "both", angle = 90, length = unit(.2,"cm"))) +
-    annotate("label",
-             label = PeakLabel,
-             x = HighDate + difftime(EndingDate, HighDate) / 2,
-             y = HighValue) +
-    # Peak to Trough Line and Label
-    annotate("segment", size = 1,
-             x = HighDate, xend = LowDate,
-             y = mean(c(LowValue, HighValue)), yend = mean(c(LowValue, HighValue)),
-             arrow = arrow(ends = "both", angle = 90, length = unit(.2,"cm"))) +
-    annotate("label",
-             label = PeakvsTroughLabel,
-             x = HighDate + difftime(LowDate, HighDate) / 2,
-             y = mean(c(LowValue, HighValue))) +     
-    # Trough Line and Label
-    annotate("segment", size = 1,
-             x = LowDate, xend = EndingDate,
-             y = LowValue, yend = LowValue,
-             arrow = arrow(ends = "both", angle = 90, length = unit(.2,"cm"))) +
-    annotate("label",
-             label = TroughLabel,
-             x = LowDate + difftime(EndingDate, LowDate) / 2,
-             y = LowValue) 
 
-} else {
-  # Linux format uses "linewidth" for lines and segment
-  Plot1 = DisplayDF %>%
-    ggplot(aes(WeekBeg, SP500)) +
-      geom_line(aes(color = "Weekly Closing Value"), linewidth = 2) +
-      geom_line(aes(WeekBeg, FedFundsAlt, color = "Fed Funds Rate (Not to scale)"), linewidth = 1) +
-      geom_point(aes(WeekBeg, HighValue, color = "Peak to Date"), size = 2) +
-      geom_point(aes(WeekBeg, LowValue, color = "Trough Since Last Peak"), size = 2) +
-      scale_color_manual(name = "", values = c("Weekly Closing Value" = "black",
-                                               "Fed Funds Rate (Not to scale)" = "dark blue",
-                                               "Peak to Date" = "green",
-                                               "Trough Since Last Peak" = "red")) +
-      scale_x_date(breaks = BreakWeeks) +
-      scale_y_continuous(labels = comma_format(accuracy = 1)) +
-      theme_minimal() +
-      theme(legend.position = "bottom",
-            axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
-      labs(title = paste0("SP500 - ", PlotTitle),
-           subtitle = paste0("By Week Through : ", floor_date(EndingDate, unit = "week")),
-           caption = "Peaks = All Time Highs, Troughs are Lowest Points after a Peak",
-           x = "", y = "S&P 500 Index Value")
-
+  if (!is.null(ShowAnnotations)) {
   Plot1 +
     # Peak Line and Label
     annotate("segment", linewidth = 1,
@@ -398,53 +364,103 @@ if (str_detect(.Platform$OS.type, "win")) {
              label = TroughLabel,
              x = LowDate + difftime(EndingDate, LowDate) / 2,
              y = LowValue) 
-  
-} 
+  }  else {
+    Plot1
+  }
 
 }
 ```
 
-First a look at the most recent peak prior to the Federal Reserve rate increases targeting inflation.
+**2022 Inflation Shock: ** "Sudden onset inflation" might have been the biggest economic symptom of the Covid Pandemic.  Some of the contributing factors were:
+
+- The unprecedented fiscal stimulus of $5.3 trillion, which amounted to about 24% of the GDP1.
+- The upward pressure on wages due to the reduced labor force participation, which was affected by early retirements, caregiving responsibilities, health risks, and skill mismatches.
+- The widespread supply chain disruptions due to the increased demand for goods, the lockdowns in major exporting countries, the shortages of raw materials and semiconductors, and the transportation bottlenecks.
+
+The high inflation rate eroded the purchasing power of consumers, threatened the profit margins of businesses, and raised the expectations of further price increases. It also prompted the Federal Reserve to tighten its monetary policy by raising the federal funds rate over ten times.  Both the threat and the action led to a decline in the stock market, as investors feared that higher interest rates would slow down economic growth and reduce earnings.
+
 
 ```{r fig.width=10}
 
-PeakPlot(Sys.Date(), "Most Recent - 2022 Inflation Shock")
+PeakPlot(as.Date("2023-12-17"), "2022 Inflation Shock", NULL, TRUE)
 
 ```
 
-<font size="3">Note : Data is automatically refreshed and is current as of: `r Sys.Date()`
-</font>
-
-Now let's look at some of the historical peaks and troughs and how those looked.
+**Covid Panic: ** The 2020 Covid 19 Pandemic caused mandatory shut-down's and economic concerns which created one of the sharpest drops from a peak in history.  However, once the government committed to stimulus efforts and the markets realized that less than 20% of all employees would be impacted the market quickly recovered.  Increased spending on the "stay at home economy" drove the market beyond recovery to new high's even during the pandemic.
 
 ```{r fig.width=10}
 
-PeakPlot(as.Date("2020-05-01"), "2020 Covid Panic")
+PeakPlot(as.Date("2020-08-09"), "2020 Covid Panic", as.Date("2019-08-05"), TRUE)
+
+```
+
+**2018 Trade War Panic: ** The escalating trade war between the US and China, rising interest rates and the uncertainty in government policy drove an unexpected decline in the later part of 2018 which was mirrored in the European markets.  China's market lost about a quarter of its' value.  By early 2019 the market had recovered as the markets adjusted to the uncertainty.
+
+```{r fig.width=10}
+
+PeakPlot(as.Date("2019-04-15"), "2019 Trade War Panic", as.Date("2018-03-15"), TRUE)
+
+```
+
+**Financial Sector Crisis:** The financial crisis of 2007–2009 was triggered by the collapse of the U.S. housing market, which exposed the fragility of many institutions who invested and speculated in it.  The crisis caused a severe contraction of liquidity and credit in global financial markets, leading to a sharp decline in stock prices and a deep recession in the real economy. The U.S. government responded with unprecedented interventions, such as the $700 billion Troubled Asset Relief Program (TARP) and the $182 billion rescue of AIG. The crisis and its aftermath had significant and lasting effects on the financial system, the economy, and the society.  There were many failures and government facilitated takeovers:
+
+- Lehman Brothers (Investment Bank) failed without any rescue, it's market cap before the crisis was $60B.
+- Bear Stearns (Investment Bank) was sold to JP Morgan Chase for $10 per share, 92% lower than it's pre-crisis price.
+- Countrywide Financial (Mortgage Lender) and Merrill Lynch (Investment Bank and Financial Services) were part of a government facilitated take-over by Bank of America who received $45B in bail-out funds.  BOA's stock price dropped from $53 per share to $3.
+- AIG (Insurance) had it's share price drop from $1,469 per share to $33 per share and received a $182B bail-out from the U.S. Government
+- Citigroup (Bank) received $45B in TARP funds and $306B in asset guarantees.  It's stock price dropped from $473 to below $10
+- Fannie Mae and Freddie Mac (Mortgage Lenders sponsored by the U.S. Government) who owned or guaranteed about half of U.S. mortgage debt received about $188B while seeing their stock prices plummet from the $65-$68 range to below one dollar.
+- General Motors (Automotive Manufacturing) received just under $50B in loans and equity.  It's stock price fell from $42 to basically zero as it emerged as a new company after the restructuring.
+
+
+```{r fig.width=10}
+
+PeakPlot(as.Date("2013-03-11"), "Financial Sector Crisis 2007 - 2009", as.Date("2007-04-01"), TRUE)
+
+```
+
+**The Dot Com Bubble :** The dot-com bubble was a period of excessive speculation and investment in internet-based companies in the late 1990s. Many of these companies had no clear business model or profitability, but attracted huge amounts of capital from investors who hoped to cash in on the rapid growth of the online sector. The bubble burst in early 2000, when the market realized that many of these companies were overvalued and unsustainable. The NASDAQ composite index, which had risen by 800% between 1995 and 2000, had dropped 78% from it's highs by October 20021. Many dot-com companies went bankrupt like Pets.com, Webvan, and Boo.com. Even surviving companies like Amazon and Cisco, suffered huge drop.  Amazon’s stock price dropped from $107 in 1999 to $7 in 200 and Cisco’s declined by 80%. The dot-com bubble and its aftermath taught valuable lessons to investors, entrepreneurs, and regulators about the risks and opportunities of the internet economy.
+
+This was the second longest peak to recovery time span in history taking just over 7 years to recover.  The longest was the great depression which took 25 years from 1929 to 1954 
+
+```{r fig.width=10}
+
+PeakPlot(as.Date("2007-05-14"), "Dot-Com Bubble", as.Date("1999-09-19"), TRUE)
+
+```
+
+**Global Uncertainty and Clinton Impeachment Hearings :** This drop was initiated by global economic concerns with Russian debt default and a weakening US dollar alarming international markets along with the beginnings of troubles in the technology sector. However, the market rebounded in the following months, partly due to the resolution of the Clinton impeachment crisis. The impeachment hearings, which began in October and ended in February, distracted the public and the media from the financial turmoil with minimal risk as democratic control in the senate guaranteed rejection of the articles of impeachment sent to it from the US House of Representatives.  Interest rate reductions by the federal reserve probably helped as well. 
+
+```{r fig.width=10}
+
+PeakPlot(as.Date("1998-11-16"), "Clinton Impeachment Hearings", as.Date("1998-04-01"), TRUE)
+
+ 
 
 ```
 
 
+**Desert Shield and Desert Storm :** With Iraq's invasion of Kuwait in August of 1990, the US began a two phase operation to protect Saudi Arabia and other middle eastern interests by a massive build-up of forces and then pushing the Iraqi forces out of Kuwait and back across the Iraq border but stopping short Baghdad, leaving the government in place.  The stock market reacted with an immediate decline and didn't fully recover until the end of the conflict whereupon the recovery was rapid.
+
 ```{r fig.width=10}
 
-PeakPlot(as.Date("2019-02-01"), "2019 Trade War Panic")
+PeakPlot(as.Date("1991-02-04"), "Desert Shield & Storm", as.Date("1990-01-01"), TRUE)
 
 ```
 
+**Black Monday :** On October 19th 1987, the market had a sudden one day drop of 20%+ in one day which as of 2023 was still the largest one day drop in history.  Many causes have been speculated but it was mostly a technical crash as there were no obvious underlying fundamental drivers behind it.  Some say it was the first computer driven crash and some of today's market "safety switches" where trading is suspended after sudden drops were implemented.  It's noteworthy that the market was already on a slight downward trend for two months before that day.  The market recovered, even in the headwinds of rising interest rates.
+
 ```{r fig.width=10}
 
-PeakPlot(as.Date("2009-06-01"), "Financial Sector Crisis 2008 - 2009")
+PeakPlot(as.Date("1989-07-17"), "Black Monday (10/19/1987)", NULL, TRUE)
 
 ```
 
-```{r fig.width=10}
-
-PeakPlot(as.Date("2002-04-01"), "Dot-Com Bubble")
-
-```
+Finally, let's look at where the current market is (data automatically refreshed and is current as of: `r Sys.Date()`):
 
 ```{r fig.width=10}
 
-PeakPlot(as.Date("1991-01-01"), "Desert Shield & Storm")
+PeakPlot(Sys.Date(), "Current Market - 5 Year Look-Back", Sys.Date() - years(5))
 
 ```
 
