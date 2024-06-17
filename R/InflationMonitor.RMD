@@ -117,7 +117,7 @@ Plot1 = PresentationDF %>%
   filter(QuoteDate >= StartDate) %>%
   filter(MetricName == PresentationMetric) %>%
   ggplot(aes(QuoteDate, MetricValue)) +
-   geom_line(size = 2, color = LineColor, na.rm = TRUE) +
+   geom_line(linewidth = 2, color = LineColor, na.rm = TRUE) +
    theme_classic() +
    theme(text=element_text(size=16),
          plot.caption=element_text(size=12),
@@ -271,7 +271,7 @@ Plot1 = PresentationDF %>%
   filter(QuoteDate >= StartDate) %>%
   filter(MetricName == PresentationMetric) %>%
   ggplot(aes(QuoteDate, MetricValue)) +
-   geom_line(size = 2, color = LineColor, na.rm = TRUE) +
+   geom_line(linewidth = 2, color = LineColor, na.rm = TRUE) +
    theme_classic() +
    theme(text=element_text(size=16),
          plot.caption=element_text(size=12),
