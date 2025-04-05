@@ -125,8 +125,15 @@ Because the host's choice is dependent on your choice (versus just having two do
 Given that there are 3 doors, you pick one and then the host reveals all but one of the remaining doors, let's run 1000 simulations that assume random positions of both the car and your initial guess and put those in a data frame:
 
 ```{r}
+
+Doors = 30
+  i = 1
+  i = i + 1
+
+
 # A function to simulate the Monty Hall problem
 GetMonty = function(Doors, N) {
+  N = 100
   Doors = 1:Doors
   for (i in 1:N) {
     TempDF = tibble(
@@ -136,7 +143,7 @@ GetMonty = function(Doors, N) {
     TempDF = TempDF %>%
       mutate(
       # Reveal all doors you didn't pick which have goats except one
-      NotRevealed = sample(Doors[-c(Car, Guess)], 1),
+      NotRevealed = if_else(Car==Guess, sample(Doors[!(Doors %in% c(Car, Guess))], 1), Car),
       Strategy = if_else(Guess == Car, "Stay", "Switch"),
       ResultStay = if_else(Guess == Car, 1, 0),
       ResultSwitch = if_else(ResultStay == 0, 1, 0)
