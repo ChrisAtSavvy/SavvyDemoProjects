@@ -34,11 +34,13 @@ QuietLoad <- function(library) {
   suppressWarnings(suppressPackageStartupMessages(
     library(library, character.only=TRUE)))
 }
-
-QuietLoad('tidyverse')
+QuietLoad('dplyr')
+QuietLoad('tidyr')
+QuietLoad('stringr')
 QuietLoad('quantmod')
 QuietLoad('lubridate')
 QuietLoad('scales')
+QuietLoad('ggplot2')
  
  
 ```
