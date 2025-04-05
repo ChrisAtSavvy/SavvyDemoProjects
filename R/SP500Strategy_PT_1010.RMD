@@ -49,12 +49,13 @@ QuietLoad('scales')
 # S&P 500, treasury rates and common sector ETF's for analytics of various strategies
 
 if (str_detect(.Platform$OS.type, "win")) {
-  ArchiveFile = "C:\\Users\\Chris.Woolery\\OneDrive - Republic Airways\\Documents\\RepoArchive\\SavvyDemoProjects\\R\\SP500Strategy_PT1010.RData"
+  ArchiveFile = "C:\\Users\\cwool\\RepoArchive\\SavvyDemoProjects\\R\\SP500Strategy_PT1010.RData"
+
 } else {
   ArchiveFile = "/home/woolylinux01/Documents/SavvyDemoProjects/R/SP500Strategy_PT1010.RData"
 }
 
-Offline = TRUE
+Offline = FALSE
 
 if (Offline) {
 
