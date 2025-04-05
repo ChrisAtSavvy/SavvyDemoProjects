@@ -126,14 +126,8 @@ Given that there are 3 doors, you pick one and then the host reveals all but one
 
 ```{r}
 
-Doors = 30
-  i = 1
-  i = i + 1
-
-
 # A function to simulate the Monty Hall problem
 GetMonty = function(Doors, N) {
-  N = 100
   Doors = 1:Doors
   for (i in 1:N) {
     TempDF = tibble(
@@ -209,6 +203,7 @@ So your odds of NOT picking the door were 9/10 and now the host has eliminated 8
 Here's what happens if we run 1000 simulations on the 10 door scenario:
 
 ```{r}
+
 SimulationDF = GetMonty(10,1000)
 
 CarPlot = SimulationDF %>%

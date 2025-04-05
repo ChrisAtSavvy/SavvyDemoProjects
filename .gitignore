@@ -3,8 +3,7 @@ target/
 dbt_packages/
 logs/
 *.dcf
-*.html
-*.RData
+*.html*.RData
 R/rsconnect/
 R/.Rhistory
 R/PGADrivingvsSuccess_files/
